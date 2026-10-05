@@ -2,7 +2,7 @@
 #include "exception"
 #include "boost/asio.hpp"
 #include "boost/asio/ssl.hpp"
-
+#include "protocol.hpp"
 typedef boost::asio::ssl::stream<boost::asio::ip::tcp::socket> ssl_socket_type;
 using namespace std;
 
@@ -41,9 +41,24 @@ int main() {
                                 // 4. Perform TLS handshake ONCE a peer connects
                                 ssl_socket->async_handshake(
                                     boost::asio::ssl::stream_base::server,
-                                    [](const boost::system::error_code& handshake_ec) {
+                                    [ssl_socket](const boost::system::error_code& handshake_ec) {
                                         if (!handshake_ec) {
                                             cout << "TLS HANDSHAKE SUCCESS. CHANNEL IS SECURE" << endl;
+                                            auto header = std::make_shared<PacketHeader>();
+                                            boost::asio::async_read(
+                                                *ssl_socket,
+                                                boost::asio::buffer(header.get(), sizeof(PacketHeader)),
+                                                [ssl_socket, header](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+                                                    if (!ec) {
+                                                        std::cout << "[SERVER] Received 47-byte protocol header!" << std::endl;
+                                                        std::cout << "[SERVER] Payload size to follow: " << ntohl(header->payload_len) << " bytes" << std::endl;
+                                                        std::cout << "[SERVER] File total size: " << be64toh(header->total_file_size) << " bytes" << std::endl;
+                                                    } else {
+                                                        std::cerr << "[SERVER ERROR] Failed to read header: " << ec.message() << std::endl;
+                                                    }
+                                                }
+                                            );
+
                                         } else {
                                             cerr << "[ERROR] Handshake failed: " << handshake_ec.message() << endl;
                                         }
