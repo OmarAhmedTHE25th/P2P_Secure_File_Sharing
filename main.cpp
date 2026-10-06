@@ -4,6 +4,7 @@
 #include "boost/asio/ssl.hpp"
 #include "protocol.hpp"
 #include "file_streaming.hpp"
+#include "client_node.hpp"
 typedef boost::asio::ssl::stream<boost::asio::ip::tcp::socket> ssl_socket_type;
 using namespace std;
 
