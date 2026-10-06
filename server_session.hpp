@@ -9,6 +9,15 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/endian/conversion.hpp>
 #include "protocol.hpp"
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <fstream>
+#include <vector>
+#include <openssl/evp.h>
+#include <openssl/crypto.h>
+#include "file_streaming.hpp"
+
 using std::cout;
 using std::cerr;
 using std::string;
@@ -26,7 +35,13 @@ public:
     static constexpr uint16_t MAX_FILE_LEN = 255;
     static constexpr uint64_t MAX_FILE_SIZE = 10ULL * 1024 * 1024 * 1024;
     explicit ServerSession(shared_ptr<SSLStream> socket) : socket_(std::move(socket)){}
-
+    ~ServerSession() {
+        if (part_file_.is_open()) part_file_.close();
+        if (!temp_path_.empty() && !finished_) {
+            std::error_code ec;
+            fs::remove(temp_path_, ec);   // never leave half-received files behind
+        }
+    }
     void start () {read_header();}
 
 private:
@@ -62,17 +77,14 @@ private:
         raw_name_.resize(filename_len);
         read_filename();
     }
-
     static bool sanitize_file_name(const string & raw_name, string& clean_name) {
         if (raw_name.find('\000' ) != string::npos) return false;
         clean_name = fs::path(raw_name).filename().string();
         return !clean_name.empty() && clean_name != "." && clean_name != ".." && clean_name == raw_name;
     }
-
     static void reject(const string& reason) {
         cerr << "[SERVER] Rejected peer: " << reason << "\n";
     }
-
     void read_filename() {
         net::async_read(*socket_,net::buffer(raw_name_),
             [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
@@ -85,11 +97,136 @@ private:
                     return;
                 }
                 cout << "[SERVER] Incoming file: " << self->safe_name_ << "\n";
+                self -> prepare_receive();
             }
 
 
         );
     }
+
+    void prepare_receive() {
+    const fs::path save_dir = "received";
+    std::error_code fs_ec;
+    fs::create_directories(save_dir, fs_ec);
+    if (fs_ec) { reject("Cannot create save folder"); return; }
+
+    fs::path final_path = save_dir / safe_name_;
+    fs::path temp_path  = save_dir / (safe_name_ + ".part");
+    if (fs::exists(final_path, fs_ec) || fs::exists(temp_path, fs_ec)) {
+        reject("File already exists or is already being received");
+        return;
+    }
+
+    part_file_.open(temp_path, std::ios::binary);
+    if (!part_file_.is_open()) { reject("Cannot open temp file"); return; }
+
+    // Only claim these paths once we truly own the temp file
+    final_path_ = final_path;
+    temp_path_  = temp_path;
+
+    if (!hash_ctx_ || EVP_DigestInit_ex(hash_ctx_.get(), EVP_sha256(), nullptr) != 1) {
+        reject("Hash init failed");
+        return;
+    }
+
+    buffer_.resize(FileStreamer::CHUNK_SIZE);
+    read_next_chunk();
+}
+
+    void read_next_chunk() {
+        uint64_t remaining = file_size_ - bytes_received_;
+        if (remaining == 0) { read_eof_header(); return; }
+
+        std::size_t to_read = static_cast<std::size_t>(std::min<uint64_t>(remaining, buffer_.size()));
+        net::async_read(*socket_, net::buffer(buffer_.data(), to_read),
+            [self = shared_from_this()](const boost::system::error_code& ec, std::size_t n) {
+                if (ec) {
+                    std::cerr << "[SERVER ERROR] Connection lost mid-transfer: " << ec.message() << '\n';
+                    return;
+                }
+                self->handle_chunk(n);
+            });
+    }
+
+    void handle_chunk(std::size_t n) {
+        part_file_.write(buffer_.data(), static_cast<std::streamsize>(n));
+        if (!part_file_) { reject("Disk write failed"); return; }
+        if (EVP_DigestUpdate(hash_ctx_.get(), buffer_.data(), n) != 1) { reject("Hash update failed"); return; }
+        bytes_received_ += n;
+        read_next_chunk();
+    }
+
+    void read_eof_header() {
+        net::async_read(*socket_, net::buffer(&eof_header_, sizeof(PacketHeader)),
+            [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
+                if (ec) {
+                    std::cerr << "[SERVER ERROR] Failed to read EOF packet: " << ec.message() << '\n';
+                    return;
+                }
+                self->finish_transfer();
+            });
+    }
+
+    void finish_transfer() {
+        if (eof_header_.msg_type != static_cast<uint8_t>(MessageType::END_OF_FILE)) {
+            reject("Expected END_OF_FILE packet");
+            return;
+        }
+
+        part_file_.close();
+        if (part_file_.fail()) { send_ack(AckStatus::SERVER_ERROR); return; }
+
+        std::array<uint8_t, 32> digest{};
+        unsigned int digest_len = 0;
+        if (EVP_DigestFinal_ex(hash_ctx_.get(), digest.data(), &digest_len) != 1) {
+            send_ack(AckStatus::SERVER_ERROR);
+            return;
+        }
+
+        if (CRYPTO_memcmp(digest.data(), header_.file_hash, digest.size()) != 0) {
+            std::cerr << "[SERVER] HASH MISMATCH. Discarding " << safe_name_ << '\n';
+            send_ack(AckStatus::HASH_MISMATCH);   // destructor deletes the .part file
+            return;
+        }
+
+        std::error_code rename_ec;
+        fs::rename(temp_path_, final_path_, rename_ec);
+        if (rename_ec) {
+            std::cerr << "[SERVER ERROR] Rename failed: " << rename_ec.message() << '\n';
+            send_ack(AckStatus::SERVER_ERROR);
+            return;
+        }
+
+        finished_ = true;
+        std::cout << "[SERVER] Verified and saved: " << final_path_.string() << '\n';
+        send_ack(AckStatus::OK);
+    }
+
+    void send_ack(AckStatus status) {
+        std::memset(&ack_header_, 0, sizeof(PacketHeader));
+        ack_header_.msg_type    = static_cast<uint8_t>(MessageType::ACK);
+        ack_header_.payload_len = boost::endian::native_to_big(static_cast<uint32_t>(1));
+        ack_status_             = static_cast<uint8_t>(status);
+
+        std::array<net::const_buffer, 2> bufs{
+            net::buffer(&ack_header_, sizeof(PacketHeader)),
+            net::buffer(&ack_status_, 1)
+        };
+        net::async_write(*socket_, bufs,
+            [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
+                if (ec) std::cerr << "[SERVER ERROR] Failed to send ACK: " << ec.message() << '\n';
+            });
+    }
+    fs::path final_path_;
+    fs::path temp_path_;
+    std::ofstream part_file_;
+    std::vector<char> buffer_;
+    uint64_t bytes_received_ = 0;
+    bool finished_ = false;
+    FileStreamer::EVP_MD_CTX_ptr hash_ctx_{EVP_MD_CTX_new(), &EVP_MD_CTX_free};
+    PacketHeader eof_header_{};
+    PacketHeader ack_header_{};
+    uint8_t ack_status_ = 0;
     shared_ptr<SSLStream> socket_;
     PacketHeader header_{};
     string raw_name_;
