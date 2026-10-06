@@ -87,7 +87,6 @@ Run as a node that can both receive and send files.
 - `client_node.hpp`: Client-side connection handling.
 - `protocol.hpp`: Communication protocol definitions.
 - `file_streaming.hpp`: Utilities for file I/O and streaming.
-- `USER_GUIDE.md`: Detailed user-facing guide.
 - `CMakeLists.txt`: Build configuration.
 
 ## License
