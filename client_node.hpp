@@ -101,17 +101,7 @@ private:
     }
 }
 
-void send_filename_payload() {
-    net::async_write(ssl_socket_, net::buffer(file_name_),
-        [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
-            if (!ec) {
-                cout << "[CLIENT] Header & metadata sent. Starting file payload stream...\n";
-                self->open_file_and_stream();
-            } else {
-                cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << '\n';
-            }
-        });
-}
+
 
 void send_end_of_file_signal() {
     std::memset(&eof_header_, 0, sizeof(PacketHeader));
@@ -124,36 +114,55 @@ void send_end_of_file_signal() {
                 return;
             }
             cout << "[CLIENT] EOF packet delivered. Waiting for the receiver's verdict...\n";
-            self->read_ack();
+            self->read_reply([self](AckStatus status) {
+    if (status == AckStatus::OK) {
+        cout << "[CLIENT] Receiver confirmed: " << describe(status) << "!\n";
+    } else {
+        cerr << "[CLIENT] Transfer failed: " << describe(status) << '\n';
+    }
+});
         });
 }
 
-void read_ack() {
-    net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
+void send_filename_payload() {
+    net::async_write(ssl_socket_, net::buffer(file_name_),
         [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
             if (ec) {
-                cerr << "[CLIENT ERROR] No ACK received: " << ec.message() << '\n';
+                cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << '\n';
+                return;
+            }
+            cout << "[CLIENT] Metadata sent. Waiting for the receiver to accept...\n";
+            self->read_reply([self](AckStatus status) {
+                if (status == AckStatus::READY) {
+                    cout << "[CLIENT] Receiver accepted. Streaming file...\n";
+                    self->open_file_and_stream();
+                } else {
+                    cerr << "[CLIENT] Receiver refused the transfer: " << describe(status) << '\n';
+                }
+            });
+        });
+}
+
+// Reads one reply from the receiver (47-byte header + 1 status byte), then calls handler
+void read_reply(std::function<void(AckStatus)> handler) {
+    net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
+        [self = shared_from_this(), handler = std::move(handler)](const boost::system::error_code& ec, size_t) mutable {
+            if (ec) {
+                cerr << "[CLIENT ERROR] No reply from receiver: " << ec.message() << '\n';
                 return;
             }
             if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
                 boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
-                cerr << "[CLIENT ERROR] Malformed ACK from receiver\n";
+                cerr << "[CLIENT ERROR] Malformed reply from receiver\n";
                 return;
             }
             net::async_read(self->ssl_socket_, net::buffer(&self->ack_status_, 1),
-                [self](const boost::system::error_code& ec2, size_t) {
+                [self, handler = std::move(handler)](const boost::system::error_code& ec2, size_t) {
                     if (ec2) {
-                        cerr << "[CLIENT ERROR] Failed to read ACK status: " << ec2.message() << '\n';
+                        cerr << "[CLIENT ERROR] Failed to read reply status: " << ec2.message() << '\n';
                         return;
                     }
-                    switch (static_cast<AckStatus>(self->ack_status_)) {
-                        case AckStatus::OK:
-                            cout << "[CLIENT] Receiver confirmed: file verified and saved!\n"; break;
-                        case AckStatus::HASH_MISMATCH:
-                            cerr << "[CLIENT] Receiver says the hash did NOT match. File discarded.\n"; break;
-                        default:
-                            cerr << "[CLIENT] Receiver hit an error and could not save the file.\n"; break;
-                    }
+                    handler(static_cast<AckStatus>(self->ack_status_));
                 });
         });
 }

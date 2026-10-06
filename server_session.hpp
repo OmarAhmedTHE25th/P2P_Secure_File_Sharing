@@ -70,7 +70,7 @@ private:
             return;
         }
         if (file_size_ > MAX_FILE_SIZE) {
-            reject("File too large");
+            reject(AckStatus::FILE_TOO_LARGE, "File too large");
             return;
         }
         cout << "[SERVER] Header OK. Filename length: " << filename_len
@@ -81,11 +81,27 @@ private:
     static bool sanitize_file_name(const string & raw_name, string& clean_name) {
         if (raw_name.find('\000' ) != string::npos) return false;
         clean_name = fs::path(raw_name).filename().string();
+        std::string base = clean_name;
+        auto dot_pos = base.find('.');
+        if (dot_pos != std::string::npos) {
+            base = base.substr(0, dot_pos);
+        }
+
+        std::ranges::transform(base, base.begin(),
+                               [](unsigned char c) { return std::toupper(c); });
+
+        if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
+            base == "COM1" || base == "COM2" || base == "COM3" ||
+            base == "COM4" || base == "COM5" || base == "COM6" ||
+            base == "COM7" || base == "COM8" || base == "COM9" ||
+            base == "LPT1" || base == "LPT2" || base == "LPT3" ||
+            base == "LPT4" || base == "LPT5" || base == "LPT6" ||
+            base == "LPT7" || base == "LPT8" || base == "LPT9") {
+            return false;
+        }
         return !clean_name.empty() && clean_name != "." && clean_name != ".." && clean_name == raw_name;
     }
-    static void reject(const string& reason) {
-        cerr << "[SERVER] Rejected peer: " << reason << "\n";
-    }
+    
     void read_filename() {
         net::async_read(*socket_,net::buffer(raw_name_),
             [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
@@ -94,7 +110,7 @@ private:
                     return;
                 }
                 if (!sanitize_file_name(self -> raw_name_,self -> safe_name_)) {
-                    reject("Unsafe Filename");
+                    self->reject(AckStatus::UNSAFE_FILENAME, "Unsafe Filename");
                     return;
                 }
                 cout << "[SERVER] Incoming file: " << self->safe_name_ << "\n";
@@ -108,29 +124,29 @@ private:
     void prepare_receive() {
     std::error_code fs_ec;
     fs::create_directories(save_dir_, fs_ec);
-    if (fs_ec) { reject("Cannot create save folder"); return; }
+    if (fs_ec) { reject(AckStatus::SERVER_ERROR, "Cannot create save folder"); return; }
 
     fs::path final_path = save_dir_ / safe_name_;
     fs::path temp_path  = save_dir_ / (safe_name_ + ".part");
     if (fs::exists(final_path, fs_ec) || fs::exists(temp_path, fs_ec)) {
-        reject("File already exists or is already being received");
+        reject(AckStatus::ALREADY_EXISTS, "File already exists or is already being received");
         return;
     }
 
     part_file_.open(temp_path, std::ios::binary);
-    if (!part_file_.is_open()) { reject("Cannot open temp file"); return; }
+    if (!part_file_.is_open()) { reject(AckStatus::SERVER_ERROR, "Cannot open temp file"); return; }
 
     // Only claim these paths once we truly own the temp file
     final_path_ = final_path;
     temp_path_  = temp_path;
 
     if (!hash_ctx_ || EVP_DigestInit_ex(hash_ctx_.get(), EVP_sha256(), nullptr) != 1) {
-        reject("Hash init failed");
+        reject(AckStatus::SERVER_ERROR, "Hash init failed");
         return;
     }
 
     buffer_.resize(FileStreamer::CHUNK_SIZE);
-    read_next_chunk();
+    send_ack(AckStatus::READY, [self = shared_from_this()] { self->read_next_chunk(); });
 }
 
     void read_next_chunk() {
@@ -150,8 +166,8 @@ private:
 
     void handle_chunk(std::size_t n) {
         part_file_.write(buffer_.data(), static_cast<std::streamsize>(n));
-        if (!part_file_) { reject("Disk write failed"); return; }
-        if (EVP_DigestUpdate(hash_ctx_.get(), buffer_.data(), n) != 1) { reject("Hash update failed"); return; }
+        if (!part_file_) { reject(AckStatus::SERVER_ERROR, "Disk write failed"); return; }
+        if (EVP_DigestUpdate(hash_ctx_.get(), buffer_.data(), n) != 1) { reject(AckStatus::SERVER_ERROR, "Hash update failed"); return; }
         bytes_received_ += n;
         read_next_chunk();
     }
@@ -169,7 +185,7 @@ private:
 
     void finish_transfer() {
         if (eof_header_.msg_type != static_cast<uint8_t>(MessageType::END_OF_FILE)) {
-            reject("Expected END_OF_FILE packet");
+            reject(AckStatus::BAD_REQUEST, "Expected END_OF_FILE packet");
             return;
         }
 
@@ -201,8 +217,12 @@ private:
         std::cout << "[SERVER] Verified and saved: " << final_path_.string() << '\n';
         send_ack(AckStatus::OK);
     }
+    void reject(AckStatus status, const std::string& reason) {
+        std::cerr << "[SERVER] Rejected peer: " << reason << '\n';
+        send_ack(status);   // tell the sender why; the session cleans itself up afterwards
+    }
 
-    void send_ack(AckStatus status) {
+    void send_ack(AckStatus status, std::function<void()> on_sent = nullptr) {
         std::memset(&ack_header_, 0, sizeof(PacketHeader));
         ack_header_.msg_type    = static_cast<uint8_t>(MessageType::ACK);
         ack_header_.payload_len = boost::endian::native_to_big(static_cast<uint32_t>(1));
@@ -213,10 +233,15 @@ private:
             net::buffer(&ack_status_, 1)
         };
         net::async_write(*socket_, bufs,
-            [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
-                if (ec) std::cerr << "[SERVER ERROR] Failed to send ACK: " << ec.message() << '\n';
+            [self = shared_from_this(), on_sent = std::move(on_sent)](const boost::system::error_code& ec, std::size_t) {
+                if (ec) {
+                    std::cerr << "[SERVER ERROR] Failed to send ACK: " << ec.message() << '\n';
+                    return;
+                }
+                if (on_sent) on_sent();
             });
     }
+   
     fs::path final_path_;
     fs::path temp_path_;
     std::ofstream part_file_;

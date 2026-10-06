@@ -11,11 +11,33 @@ enum class MessageType : uint8_t {
     ACK         = 0x04   // Confirmation back to sender
 };
 // Result codes the receiver sends back inside an ACK
+
 enum class AckStatus : uint8_t {
-    OK            = 0,
-    HASH_MISMATCH = 1,
-    SERVER_ERROR  = 2
+    OK              = 0,  // final verdict: file verified and saved
+    HASH_MISMATCH   = 1,
+    SERVER_ERROR    = 2,
+    READY           = 3,  // green light: metadata accepted, send the bytes
+    BAD_REQUEST     = 4,
+    FILE_TOO_LARGE  = 5,
+    UNSAFE_FILENAME = 6,
+    ALREADY_EXISTS  = 7,
+    NO_SPACE        = 8
 };
+
+inline const char* describe(AckStatus status) {
+    switch (status) {
+        case AckStatus::OK:              return "file verified and saved";
+        case AckStatus::HASH_MISMATCH:   return "hash did not match, file discarded";
+        case AckStatus::SERVER_ERROR:    return "receiver-side error";
+        case AckStatus::READY:           return "ready to receive";
+        case AckStatus::BAD_REQUEST:     return "malformed request";
+        case AckStatus::FILE_TOO_LARGE:  return "file is larger than the receiver allows";
+        case AckStatus::UNSAFE_FILENAME: return "filename not allowed";
+        case AckStatus::ALREADY_EXISTS:  return "a file with that name already exists";
+        case AckStatus::NO_SPACE:        return "not enough disk space on the receiver";
+    }
+    return "unknown reason";
+}
 #pragma pack(push, 1)
 struct PacketHeader {
     uint8_t  msg_type;         // 1 byte  (MessageType enum)
