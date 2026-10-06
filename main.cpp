@@ -3,6 +3,7 @@
 #include "boost/asio.hpp"
 #include "boost/asio/ssl.hpp"
 #include "protocol.hpp"
+#include "file_streaming.hpp"
 typedef boost::asio::ssl::stream<boost::asio::ip::tcp::socket> ssl_socket_type;
 using namespace std;
 
@@ -18,6 +19,21 @@ ssl_ctx.set_options(
 }
 int main() {
     try {
+        cout << "===========P2P NODE STARTING==============\n";
+
+
+        // Test calculation:
+        try {
+            std::string test_file = "server.crt";
+
+            uint64_t size = FileStreamer::get_file_size(test_file);
+            auto hash = FileStreamer::compute_sha256(test_file);
+
+            std::cout << "[FILE STREAMER] File: " << test_file << " (" << size << " bytes)" << std::endl;
+            std::cout << "[FILE STREAMER] SHA-256 computed successfully!" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[ERROR] " << e.what() << std::endl;
+        }
         boost::asio::io_context io_ctx;
         boost::asio::ssl::context ssl_ctx(boost::asio::ssl::context::tlsv13_server);
         configure_server_mode(ssl_ctx);
