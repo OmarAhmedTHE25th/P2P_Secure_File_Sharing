@@ -29,15 +29,17 @@ using tcp = net::ip::tcp;
 class ClientNode : public enable_shared_from_this<ClientNode> {
 public:
     using SSLStream = net::ssl::stream<tcp::socket>;
-    ClientNode(net::io_context& io_ctx,net::ssl::context& ssl_ctx): resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx){};
-
+    ClientNode(net::io_context& io_ctx,net::ssl::context& ssl_ctx)
+        : resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx), timer_(io_ctx) {};
 
     void send_file(const string& port,const string& host,const string& file_path) {
         file_path_ = file_path;
         ssl_socket_.set_verify_callback(net::ssl::host_name_verification(host));
+        start_timeout();
         resolver_.async_resolve(host,port,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::resolver::results_type& endpoints) {
                 if (!ec) {
+                    self->reset_timeout();
                     self ->connect(endpoints);
                 } else {
                     cerr << "[CLIENT ERROR]: Resolve Failed." << ec.message() << "\n";
@@ -46,16 +48,38 @@ public:
     }
 
 private:
+    void start_timeout() {
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
+            if (!ec) {
+                std::cerr << "[CLIENT] Operation timed out\n";
+                boost::system::error_code ignored_ec;
+                self->ssl_socket_.lowest_layer().close(ignored_ec);
+            }
+        });
+    }
 
+    void reset_timeout() {
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
+            if (!ec) {
+                std::cerr << "[CLIENT] Operation timed out\n";
+                boost::system::error_code ignored_ec;
+                self->ssl_socket_.lowest_layer().close(ignored_ec);
+            }
+        });
+    }
 
     void handshake() {
         ssl_socket_.async_handshake(net::ssl::stream_base::client,
             [self = shared_from_this()](const boost::system::error_code& ec) {
                 if (!ec) {
+                    self->reset_timeout();
                     cout << "[CLIENT] TLS Handshake SUCCESS!!" << "\n";
                     self->prepare_and_send_header();
                 } else {
-                    cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
+                    if (ec != net::error::operation_aborted)
+                        cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
                 }
             }
             );
@@ -65,10 +89,12 @@ private:
         net::async_connect(ssl_socket_.lowest_layer(),endpoints,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::endpoint&) {
                 if (!ec) {
+                    self->reset_timeout();
                     cout << "[CLIENT] TCP Connected. Performing TLS 1.3 handshake..." << "\n";
                     self->handshake();
                 } else {
-                    cerr << "[CLIENT ERROR] TCP Connect failed: " << ec.message() << "\n";
+                    if (ec != net::error::operation_aborted)
+                        cerr << "[CLIENT ERROR] TCP Connect failed: " << ec.message() << "\n";
                 }
 
             }
@@ -91,9 +117,11 @@ private:
         net::async_write(ssl_socket_, net::buffer(&header_, sizeof(PacketHeader)),
             [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
                 if (!ec) {
+                    self->reset_timeout();
                     self->send_filename_payload();
                 } else {
-                    cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << '\n';
+                    if (ec != net::error::operation_aborted)
+                        cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << '\n';
                 }
             });
     } catch (const exception& e) {
@@ -110,9 +138,11 @@ void send_end_of_file_signal() {
     net::async_write(ssl_socket_, net::buffer(&eof_header_, sizeof(PacketHeader)),
         [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
             if (ec) {
-                cerr << "[CLIENT ERROR] Failed to send EOF packet: " << ec.message() << '\n';
+                if (ec != net::error::operation_aborted)
+                    cerr << "[CLIENT ERROR] Failed to send EOF packet: " << ec.message() << '\n';
                 return;
             }
+            self->reset_timeout();
             cout << "[CLIENT] EOF packet delivered. Waiting for the receiver's verdict...\n";
             self->read_reply([self](AckStatus status) {
     if (status == AckStatus::OK) {
@@ -128,9 +158,11 @@ void send_filename_payload() {
     net::async_write(ssl_socket_, net::buffer(file_name_),
         [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
             if (ec) {
-                cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << '\n';
+                if (ec != net::error::operation_aborted)
+                    cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << '\n';
                 return;
             }
+            self->reset_timeout();
             cout << "[CLIENT] Metadata sent. Waiting for the receiver to accept...\n";
             self->read_reply([self](AckStatus status) {
                 if (status == AckStatus::READY) {
@@ -148,9 +180,11 @@ void read_reply(std::function<void(AckStatus)> handler) {
     net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
         [self = shared_from_this(), handler = std::move(handler)](const boost::system::error_code& ec, size_t) mutable {
             if (ec) {
-                cerr << "[CLIENT ERROR] No reply from receiver: " << ec.message() << '\n';
+                if (ec != net::error::operation_aborted)
+                    cerr << "[CLIENT ERROR] No reply from receiver: " << ec.message() << '\n';
                 return;
             }
+            self->reset_timeout();
             if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
                 boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
                 cerr << "[CLIENT ERROR] Malformed reply from receiver\n";
@@ -159,9 +193,11 @@ void read_reply(std::function<void(AckStatus)> handler) {
             net::async_read(self->ssl_socket_, net::buffer(&self->ack_status_, 1),
                 [self, handler = std::move(handler)](const boost::system::error_code& ec2, size_t) {
                     if (ec2) {
-                        cerr << "[CLIENT ERROR] Failed to read reply status: " << ec2.message() << '\n';
+                        if (ec2 != net::error::operation_aborted)
+                            cerr << "[CLIENT ERROR] Failed to read reply status: " << ec2.message() << '\n';
                         return;
                     }
+                    self->reset_timeout();
                     handler(static_cast<AckStatus>(self->ack_status_));
                 });
         });
@@ -169,6 +205,22 @@ void read_reply(std::function<void(AckStatus)> handler) {
 
 
     void stream_next_chunk() {
+        // Progress bar
+        try {
+            uint64_t file_size = FileStreamer::get_file_size(file_path_);
+            if (file_size > 0) {
+                uint64_t pos = file_stream_.tellg();
+                if (pos == (uint64_t)-1) pos = file_size; // End of file
+                int progress = static_cast<int>((pos * 100) / file_size);
+                static int last_progress = -1;
+                if (progress != last_progress) {
+                    std::cout << "\r[CLIENT] Progress: [" << std::string(progress / 2, '=') << std::string(50 - progress / 2, ' ') << "] " << progress << "%" << std::flush;
+                    if (progress == 100) std::cout << std::endl;
+                    last_progress = progress;
+                }
+            }
+        } catch (...) {}
+
         if (!file_stream_.read(buffer_.data(), buffer_.size()) && file_stream_.gcount() == 0) {
             std::cout << "[CLIENT] File transfer complete!" << "\n";
             send_end_of_file_signal();
@@ -179,9 +231,11 @@ void read_reply(std::function<void(AckStatus)> handler) {
         net::async_write(ssl_socket_, net::buffer(buffer_.data(), bytes_read),
             [self = shared_from_this()](const boost::system::error_code& ec, size_t bytes_transferred) {
                 if (!ec) {
+                    self->reset_timeout();
                     self->stream_next_chunk(); // Recursively stream the next chunk asynchronously
                 } else {
-                    std::cerr << "[CLIENT ERROR] Stream write error: " << ec.message() << "\n";
+                    if (ec != net::error::operation_aborted)
+                        std::cerr << "[CLIENT ERROR] Stream write error: " << ec.message() << "\n";
                 }
             }
         );
@@ -197,6 +251,7 @@ void read_reply(std::function<void(AckStatus)> handler) {
         stream_next_chunk();
     }
 
+    net::steady_timer timer_;
     string file_name_;
     PacketHeader eof_header_{};
     PacketHeader ack_header_{};

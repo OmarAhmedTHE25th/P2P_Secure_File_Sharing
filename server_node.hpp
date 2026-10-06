@@ -45,6 +45,21 @@ private:
                     std::cerr << "[SERVER ERROR] Handshake failed: " << ec.message() << '\n';
                     return;
                 }
+                
+                // Fingerprint verification
+                X509* cert = SSL_get_peer_certificate(socket->native_handle());
+                if (cert) {
+                    unsigned char md[EVP_MAX_MD_SIZE];
+                    unsigned int n;
+                    if (X509_digest(cert, EVP_sha256(), md, &n)) {
+                        std::cout << "[SERVER] Peer fingerprint: ";
+                        for (unsigned int i = 0; i < n; i++) {
+                            printf("%02X%c", md[i], (i == n - 1) ? '\n' : ':');
+                        }
+                    }
+                    X509_free(cert);
+                }
+
                 std::cout << "[SERVER] TLS handshake OK. Channel is secure.\n";
                 std::make_shared<ServerSession>(socket, self->save_dir_)->start();
             });

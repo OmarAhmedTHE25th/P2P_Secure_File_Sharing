@@ -35,24 +35,54 @@ public:
     static constexpr uint16_t MAX_FILE_LEN = 255;
     static constexpr uint64_t MAX_FILE_SIZE = 10ULL * 1024 * 1024 * 1024;
     ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir)
-     : socket_(std::move(socket)), save_dir_(std::move(save_dir)) {}
+     : socket_(std::move(socket)), 
+       save_dir_(std::move(save_dir)),
+       timer_(socket_->get_executor()) {}
     ~ServerSession() {
+        timer_.cancel();
         if (part_file_.is_open()) part_file_.close();
         if (!temp_path_.empty() && !finished_) {
             std::error_code ec;
             fs::remove(temp_path_, ec);   // never leave half-received files behind
         }
     }
-    void start () {read_header();}
+    void start () {
+        start_timeout();
+        read_header();
+    }
 
 private:
+    void start_timeout() {
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
+            if (!ec) {
+                std::cerr << "[SERVER] Session timed out\n";
+                boost::system::error_code ignored_ec;
+                self->socket_->lowest_layer().close(ignored_ec);
+            }
+        });
+    }
+
+    void reset_timeout() {
+        timer_.expires_after(std::chrono::seconds(30));
+        timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
+            if (!ec) {
+                std::cerr << "[SERVER] Session timed out\n";
+                boost::system::error_code ignored_ec;
+                self->socket_->lowest_layer().close(ignored_ec);
+            }
+        });
+    }
+
     void read_header() {
         net::async_read(*socket_,net::buffer(&header_, sizeof(PacketHeader)),
                         [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
                             if (ec) {
-                                cerr << "[SEVER ERROR] failed to read header" << "\n";
+                                if (ec != net::error::operation_aborted)
+                                    cerr << "[SERVER ERROR] failed to read header: " << ec.message() << "\n";
                                 return;
                             }
+                            self->reset_timeout();
                             self -> handle_header();
                         }
         );
@@ -106,9 +136,11 @@ private:
         net::async_read(*socket_,net::buffer(raw_name_),
             [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
                 if (ec) {
-                    cerr << "[SERVER ERROR] Failed to read filename: " << ec.message() << "\n";
+                    if (ec != net::error::operation_aborted)
+                        cerr << "[SERVER ERROR] Failed to read filename: " << ec.message() << "\n";
                     return;
                 }
+                self->reset_timeout();
                 if (!sanitize_file_name(self -> raw_name_,self -> safe_name_)) {
                     self->reject(AckStatus::UNSAFE_FILENAME, "Unsafe Filename");
                     return;
@@ -151,15 +183,29 @@ private:
 
     void read_next_chunk() {
         uint64_t remaining = file_size_ - bytes_received_;
+        
+        // Progress bar
+        if (file_size_ > 0) {
+            int progress = static_cast<int>((bytes_received_ * 100) / file_size_);
+            static int last_progress = -1;
+            if (progress != last_progress) {
+                std::cout << "\r[SERVER] Progress: [" << std::string(progress / 2, '=') << std::string(50 - progress / 2, ' ') << "] " << progress << "%" << std::flush;
+                if (progress == 100) std::cout << std::endl;
+                last_progress = progress;
+            }
+        }
+
         if (remaining == 0) { read_eof_header(); return; }
 
         std::size_t to_read = static_cast<std::size_t>(std::min<uint64_t>(remaining, buffer_.size()));
         net::async_read(*socket_, net::buffer(buffer_.data(), to_read),
             [self = shared_from_this()](const boost::system::error_code& ec, std::size_t n) {
                 if (ec) {
-                    std::cerr << "[SERVER ERROR] Connection lost mid-transfer: " << ec.message() << '\n';
+                    if (ec != net::error::operation_aborted)
+                        std::cerr << "[SERVER ERROR] Connection lost mid-transfer: " << ec.message() << '\n';
                     return;
                 }
+                self->reset_timeout();
                 self->handle_chunk(n);
             });
     }
@@ -176,9 +222,11 @@ private:
         net::async_read(*socket_, net::buffer(&eof_header_, sizeof(PacketHeader)),
             [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
                 if (ec) {
-                    std::cerr << "[SERVER ERROR] Failed to read EOF packet: " << ec.message() << '\n';
+                    if (ec != net::error::operation_aborted)
+                        std::cerr << "[SERVER ERROR] Failed to read EOF packet: " << ec.message() << '\n';
                     return;
                 }
+                self->reset_timeout();
                 self->finish_transfer();
             });
     }
@@ -235,13 +283,16 @@ private:
         net::async_write(*socket_, bufs,
             [self = shared_from_this(), on_sent = std::move(on_sent)](const boost::system::error_code& ec, std::size_t) {
                 if (ec) {
-                    std::cerr << "[SERVER ERROR] Failed to send ACK: " << ec.message() << '\n';
+                    if (ec != net::error::operation_aborted)
+                        std::cerr << "[SERVER ERROR] Failed to send ACK: " << ec.message() << '\n';
                     return;
                 }
+                self->reset_timeout();
                 if (on_sent) on_sent();
             });
     }
-   
+
+    net::steady_timer timer_;
     fs::path final_path_;
     fs::path temp_path_;
     std::ofstream part_file_;
