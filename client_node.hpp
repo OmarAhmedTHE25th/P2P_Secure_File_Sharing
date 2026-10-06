@@ -12,7 +12,6 @@
 #include <filesystem>
 using std::cout;
 using std::cerr;
-using std::endl;
 using std::string;
 using std::vector;
 using std::ifstream;
@@ -41,7 +40,7 @@ public:
                 if (!ec) {
                     self ->connect(endpoints);
                 } else {
-                    cerr << "[CLIENT ERROR]: Resolve Failed." << ec.message() << endl;
+                    cerr << "[CLIENT ERROR]: Resolve Failed." << ec.message() << "\n";
                 }
             });
     }
@@ -53,10 +52,10 @@ private:
         ssl_socket_.async_handshake(net::ssl::stream_base::client,
             [self = shared_from_this()](const boost::system::error_code& ec) {
                 if (!ec) {
-                    cout << "[CLIENT] TLS Handshake SUCCESS!!" << endl;
+                    cout << "[CLIENT] TLS Handshake SUCCESS!!" << "\n";
                     self->prepare_and_send_header();
                 } else {
-                    cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << endl;
+                    cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
                 }
             }
             );
@@ -66,10 +65,10 @@ private:
         net::async_connect(ssl_socket_.lowest_layer(),endpoints,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::endpoint&) {
                 if (!ec) {
-                    cout << "[CLIENT] TCP Connected. Performing TLS 1.3 handshake..." << endl;
+                    cout << "[CLIENT] TCP Connected. Performing TLS 1.3 handshake..." << "\n";
                     self->handshake();
                 } else {
-                    cerr << "[CLIENT ERROR] TCP Connect failed: " << ec.message() << endl;
+                    cerr << "[CLIENT ERROR] TCP Connect failed: " << ec.message() << "\n";
                 }
 
             }
@@ -86,7 +85,7 @@ private:
             header_.total_file_size = boost::endian::native_to_big(file_size);
             header_.filename_len = boost::endian::native_to_big(static_cast<uint16_t>(file_name.length()));
             memcpy(header_.file_hash,file_hash.data(),32);
-            cout << "[CLIENT] Sending 47-byte PacketHeader..." << endl;
+            cout << "[CLIENT] Sending 47-byte PacketHeader..." << "\n";
 
             net::async_write(ssl_socket_,net::buffer(&header_,sizeof(PacketHeader)),
                 [self = shared_from_this(),file_name](const boost::system::error_code& ec,size_t ) {
@@ -94,14 +93,14 @@ private:
                         self->send_filename_payload(file_name);
                     }
                     else {
-                        cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << endl;
+                        cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << "\n";
                     }
                 }
                 );
 
 
         } catch (const exception& e) {
-            cerr << "[CLIENT ERROR] File prep failed: " << e.what() << endl;
+            cerr << "[CLIENT ERROR] File prep failed: " << e.what() << "\n";
         }
     }
 
@@ -109,11 +108,11 @@ private:
         net::async_write(ssl_socket_,net::buffer(file_name),
             [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
                 if (!ec) {
-                    cout << "[CLIENT] Header & Metadata sent. Starting file payload stream..." << endl;
+                    cout << "[CLIENT] Header & Metadata sent. Starting file payload stream..." << "\n";
                     self->open_file_and_stream();
                 }
                 else {
-                    cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << endl;
+                    cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << "\n";
                 }
             }
 
@@ -123,7 +122,7 @@ private:
 
     void stream_next_chunk() {
         if (!file_stream_.read(buffer_.data(), buffer_.size()) && file_stream_.gcount() == 0) {
-            std::cout << "[CLIENT] File transfer complete!" << std::endl;
+            std::cout << "[CLIENT] File transfer complete!" << "\n";
             send_end_of_file_signal();
             return;
         }
@@ -134,7 +133,7 @@ private:
                 if (!ec) {
                     self->stream_next_chunk(); // Recursively stream the next chunk asynchronously
                 } else {
-                    std::cerr << "[CLIENT ERROR] Stream write error: " << ec.message() << std::endl;
+                    std::cerr << "[CLIENT ERROR] Stream write error: " << ec.message() << "\n";
                 }
             }
         );
@@ -143,7 +142,7 @@ private:
     void open_file_and_stream() {
         file_stream_.open(file_path_, ios::binary);
         if (!file_stream_.is_open()) {
-            cerr << "[CLIENT ERROR] Failed to open file for streaming!" << endl;
+            cerr << "[CLIENT ERROR] Failed to open file for streaming!" << "\n";
             return;
         }
         buffer_.resize(FileStreamer::CHUNK_SIZE);
@@ -159,7 +158,7 @@ private:
         net::async_write(ssl_socket_, net::buffer(eof_header.get(), sizeof(PacketHeader)),
             [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
                 if (!ec) {
-                    std::cout << "[CLIENT] EOF packet delivered successfully." << std::endl;
+                    std::cout << "[CLIENT] EOF packet delivered successfully." << "\n";
                 }
             });
     }

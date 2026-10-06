@@ -5,6 +5,7 @@
 #include "protocol.hpp"
 #include "file_streaming.hpp"
 #include "client_node.hpp"
+#include "server_session.hpp"
 typedef boost::asio::ssl::stream<boost::asio::ip::tcp::socket> ssl_socket_type;
 using namespace std;
 
@@ -28,10 +29,10 @@ int main() {
             uint64_t size = FileStreamer::get_file_size(test_file);
             auto hash = FileStreamer::compute_sha256(test_file);
 
-            cout << "[FILE STREAMER] File: " << test_file << " (" << size << " bytes)" << endl;
-            cout << "[FILE STREAMER] SHA-256 computed successfully!" << endl;
+            cout << "[FILE STREAMER] File: " << test_file << " (" << size << " bytes)" << "\n";
+            cout << "[FILE STREAMER] SHA-256 computed successfully!" << "\n";
         } catch (const std::exception& e) {
-            cerr << "[ERROR] " << e.what() << endl;
+            cerr << "[ERROR] " << e.what() << "\n";
         }
 
         boost::asio::io_context io_ctx;
@@ -43,44 +44,30 @@ int main() {
             boost::asio::ip::tcp::endpoint(boost::asio::ip::tcp::v4(), 8080)
         );
 
-        cout << "Listening on Port 8080 for an incoming peer ..." << endl;
+        cout << "Listening on Port 8080 for an incoming peer ..." << "\n";
 
         auto ssl_socket = make_shared<ssl_socket_type>(io_ctx, ssl_ctx);
 
-        cout << "INITIATING ASYNC TLS HANDSHAKE: " << endl;
+        cout << "INITIATING ASYNC TLS HANDSHAKE: " << "\n";
         acceptor.async_accept(
             ssl_socket->lowest_layer(),
             [ssl_socket](const boost::system::error_code& ec) {
                 if (!ec) {
-                    cout << "[SERVER] TCP Connection accepted! Starting TLS handshake..." << endl;
+                    cout << "[SERVER] TCP Connection accepted! Starting TLS handshake..." << "\n";
 
                     ssl_socket->async_handshake(
                         boost::asio::ssl::stream_base::server,
                         [ssl_socket](const boost::system::error_code& handshake_ec) {
                             if (!handshake_ec) {
-                                cout << "TLS HANDSHAKE SUCCESS. CHANNEL IS SECURE" << endl;
-                                auto header = std::make_shared<PacketHeader>();
-
-                                boost::asio::async_read(
-                                    *ssl_socket,
-                                    boost::asio::buffer(header.get(), sizeof(PacketHeader)),
-                                    [ssl_socket, header](const boost::system::error_code& ec, std::size_t) {
-                                        if (!ec) {
-                                            cout << "[SERVER] Received 47-byte protocol header!" << endl;
-                                            cout << "[SERVER] Payload size to follow: " << boost::endian::big_to_native(header->payload_len) << " bytes" << endl;
-                                            cout << "[SERVER] File total size: " << boost::endian::big_to_native(header->total_file_size) << " bytes" << endl;
-                                        } else {
-                                            cerr << "[SERVER ERROR] Failed to read header: " << ec.message() << endl;
-                                        }
-                                    }
-                                );
+                                cout << "TLS HANDSHAKE SUCCESS. CHANNEL IS SECURE" << "\n";
+                                std::make_shared<ServerSession>(ssl_socket)->start();
                             } else {
-                                cerr << "[ERROR] Handshake failed: " << handshake_ec.message() << endl;
+                                cerr << "[ERROR] Handshake failed: " << handshake_ec.message() << "\n";
                             }
                         }
                     );
                 } else {
-                    cerr << "[ERROR] Accept failed: " << ec.message() << endl;
+                    cerr << "[ERROR] Accept failed: " << ec.message() << "\n";
                 }
             }
         );
@@ -88,7 +75,7 @@ int main() {
         io_ctx.run();
 
     } catch (const std::exception& e) {
-        cerr << "[ERROR] " << e.what() << endl;
+        cerr << "[ERROR] " << e.what() << "\n";
         return 1;
     }
 

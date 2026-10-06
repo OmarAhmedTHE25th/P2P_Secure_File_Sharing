@@ -10,7 +10,12 @@ enum class MessageType : uint8_t {
     END_OF_FILE = 0x03,  // Signals transfer complete
     ACK         = 0x04   // Confirmation back to sender
 };
-
+// Result codes the receiver sends back inside an ACK
+enum class AckStatus : uint8_t {
+    OK            = 0,
+    HASH_MISMATCH = 1,
+    SERVER_ERROR  = 2
+};
 #pragma pack(push, 1)
 struct PacketHeader {
     uint8_t  msg_type;         // 1 byte  (MessageType enum)
