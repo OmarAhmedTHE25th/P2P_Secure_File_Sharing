@@ -176,32 +176,42 @@ void send_filename_payload() {
 }
 
 // Reads one reply from the receiver (47-byte header + 1 status byte), then calls handler
-void read_reply(std::function<void(AckStatus)> handler) {
-    net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
-        [self = shared_from_this(), handler = std::move(handler)](const boost::system::error_code& ec, size_t) mutable {
-            if (ec) {
-                if (ec != net::error::operation_aborted)
-                    cerr << "[CLIENT ERROR] No reply from receiver: " << ec.message() << '\n';
-                return;
-            }
-            self->reset_timeout();
-            if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
-                boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
-                cerr << "[CLIENT ERROR] Malformed reply from receiver\n";
-                return;
-            }
-            net::async_read(self->ssl_socket_, net::buffer(&self->ack_status_, 1),
-                [self, handler = std::move(handler)](const boost::system::error_code& ec2, size_t) {
-                    if (ec2) {
-                        if (ec2 != net::error::operation_aborted)
-                            cerr << "[CLIENT ERROR] Failed to read reply status: " << ec2.message() << '\n';
-                        return;
+    void read_reply(std::function<void(AckStatus)> handler) {
+        cout << "[CLIENT] Waiting for ACK header...\n";
+
+        net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
+            [self = shared_from_this(), handler = std::move(handler)](const boost::system::error_code& ec, size_t bytes_read) mutable {
+                if (ec) {
+                    if (ec != net::error::operation_aborted) {
+                        cerr << "[CLIENT ERROR] No reply from receiver after reading "
+                             << bytes_read << " bytes: " << ec.message() << '\n';
                     }
-                    self->reset_timeout();
-                    handler(static_cast<AckStatus>(self->ack_status_));
-                });
-        });
-}
+                    return;
+                }
+                self->reset_timeout();
+                if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
+                    boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
+                    cerr << "[CLIENT ERROR] Malformed reply from receiver\n";
+                    return;
+                }
+
+                cout << "[CLIENT] ACK header received. Waiting for ACK status...\n";
+
+                net::async_read(self->ssl_socket_, net::buffer(&self->ack_status_, 1),
+                    [self, handler = std::move(handler)](const boost::system::error_code& ec2, size_t bytes_read2) {
+                        if (ec2) {
+                            if (ec2 != net::error::operation_aborted) {
+                                cerr << "[CLIENT ERROR] Failed to read reply status after reading "
+                                     << bytes_read2 << " bytes: " << ec2.message() << '\n';
+                            }
+                            return;
+                        }
+                        self->reset_timeout();
+                        handler(static_cast<AckStatus>(self->ack_status_));
+                    });
+            });
+    }
+
 
 
     void stream_next_chunk() {

@@ -1,6 +1,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -91,7 +92,7 @@ int main(int argc, char* argv[]) {
                     if (!(std::cin >> cmd)) break;
                     if (cmd == "send") {
                         std::string host, port, file;
-                        std::cin >> host >> port >> file;
+                        std::cin >> host >> port >> std::quoted(file);;
                         node->send_file_to_addr(host, port, file);
                     } else if (cmd == "add") {
                         std::string name, host, port;
@@ -116,7 +117,6 @@ int main(int argc, char* argv[]) {
         } else if (mode == "receive" && (argc == 3 || argc == 4)) {
             uint16_t port = parse_port(argv[2]);
             fs::path save_dir = (argc == 4) ? fs::path(argv[3]) : fs::path("received");
-
             net::ssl::context ssl_ctx(net::ssl::context::tlsv13_server);
             configure_server_mode(ssl_ctx);
 

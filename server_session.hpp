@@ -90,6 +90,7 @@ private:
     void handle_header() {
         if (header_.msg_type != static_cast<uint8_t> (MessageType::METADATA)) {
             cerr << "Unexpected Message type,";
+            reject(AckStatus::BAD_REQUEST, "Expected METADATA packet");
             return;
         }
         const uint64_t payload_len = boost::endian::big_to_native(header_.payload_len);
@@ -97,6 +98,7 @@ private:
         file_size_ = boost::endian::big_to_native(header_.total_file_size);
         if (filename_len == 0 || filename_len > MAX_FILE_LEN || payload_len != filename_len) {
             cerr << "Invalid Filename Length";
+            reject(AckStatus::BAD_REQUEST, "Invalid filename length or metadata payload length");
             return;
         }
         if (file_size_ > MAX_FILE_SIZE) {
@@ -148,8 +150,6 @@ private:
                 cout << "[SERVER] Incoming file: " << self->safe_name_ << "\n";
                 self -> prepare_receive();
             }
-
-
         );
     }
 
@@ -238,18 +238,27 @@ private:
         }
 
         part_file_.close();
-        if (part_file_.fail()) { send_ack(AckStatus::SERVER_ERROR); return; }
+        if (part_file_.fail()) {
+            send_ack(AckStatus::SERVER_ERROR, [self = shared_from_this()] {
+                self->shutdown_tls();
+            });
+            return;
+        }
 
         std::array<uint8_t, 32> digest{};
         unsigned int digest_len = 0;
         if (EVP_DigestFinal_ex(hash_ctx_.get(), digest.data(), &digest_len) != 1) {
-            send_ack(AckStatus::SERVER_ERROR);
+            send_ack(AckStatus::SERVER_ERROR, [self = shared_from_this()] {
+                self->shutdown_tls();
+            });
             return;
         }
 
         if (CRYPTO_memcmp(digest.data(), header_.file_hash, digest.size()) != 0) {
             std::cerr << "[SERVER] HASH MISMATCH. Discarding " << safe_name_ << '\n';
-            send_ack(AckStatus::HASH_MISMATCH);   // destructor deletes the .part file
+            send_ack(AckStatus::HASH_MISMATCH, [self = shared_from_this()] {
+                self->shutdown_tls();
+            });
             return;
         }
 
@@ -257,17 +266,38 @@ private:
         fs::rename(temp_path_, final_path_, rename_ec);
         if (rename_ec) {
             std::cerr << "[SERVER ERROR] Rename failed: " << rename_ec.message() << '\n';
-            send_ack(AckStatus::SERVER_ERROR);
+            send_ack(AckStatus::SERVER_ERROR, [self = shared_from_this()] {
+                self->shutdown_tls();
+            });
             return;
         }
 
         finished_ = true;
         std::cout << "[SERVER] Verified and saved: " << final_path_.string() << '\n';
-        send_ack(AckStatus::OK);
+        send_ack(AckStatus::OK, [self = shared_from_this()] {
+            self->shutdown_tls();
+        });
     }
     void reject(AckStatus status, const std::string& reason) {
         std::cerr << "[SERVER] Rejected peer: " << reason << '\n';
-        send_ack(status);   // tell the sender why; the session cleans itself up afterwards
+        send_ack(status, [self = shared_from_this()] {
+            self->shutdown_tls();
+        });
+    }
+
+    void shutdown_tls() {
+        socket_->async_shutdown(
+            [self = shared_from_this()](const boost::system::error_code& ec) {
+                boost::system::error_code ignored_ec;
+                self->socket_->lowest_layer().shutdown(net::ip::tcp::socket::shutdown_both, ignored_ec);
+                self->socket_->lowest_layer().close(ignored_ec);
+
+                if (ec && ec != net::error::eof &&
+                    ec != boost::asio::ssl::error::stream_truncated &&
+                    ec != net::error::operation_aborted) {
+                    std::cerr << "[SERVER ERROR] TLS shutdown failed: " << ec.message() << '\n';
+                }
+            });
     }
 
     void send_ack(AckStatus status, std::function<void()> on_sent = nullptr) {
@@ -291,7 +321,8 @@ private:
                 if (on_sent) on_sent();
             });
     }
-
+    
+    shared_ptr<SSLStream> socket_;
     net::steady_timer timer_;
     fs::path final_path_;
     fs::path temp_path_;
@@ -303,7 +334,6 @@ private:
     PacketHeader eof_header_{};
     PacketHeader ack_header_{};
     uint8_t ack_status_ = 0;
-    shared_ptr<SSLStream> socket_;
     fs::path save_dir_;
     PacketHeader header_{};
     string raw_name_;
