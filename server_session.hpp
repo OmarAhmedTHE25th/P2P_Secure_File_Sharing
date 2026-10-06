@@ -34,7 +34,8 @@ public:
     using SSLStream = net::ssl::stream<net::ip::tcp::socket>;
     static constexpr uint16_t MAX_FILE_LEN = 255;
     static constexpr uint64_t MAX_FILE_SIZE = 10ULL * 1024 * 1024 * 1024;
-    explicit ServerSession(shared_ptr<SSLStream> socket) : socket_(std::move(socket)){}
+    ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir)
+     : socket_(std::move(socket)), save_dir_(std::move(save_dir)) {}
     ~ServerSession() {
         if (part_file_.is_open()) part_file_.close();
         if (!temp_path_.empty() && !finished_) {
@@ -105,13 +106,12 @@ private:
     }
 
     void prepare_receive() {
-    const fs::path save_dir = "received";
     std::error_code fs_ec;
-    fs::create_directories(save_dir, fs_ec);
+    fs::create_directories(save_dir_, fs_ec);
     if (fs_ec) { reject("Cannot create save folder"); return; }
 
-    fs::path final_path = save_dir / safe_name_;
-    fs::path temp_path  = save_dir / (safe_name_ + ".part");
+    fs::path final_path = save_dir_ / safe_name_;
+    fs::path temp_path  = save_dir_ / (safe_name_ + ".part");
     if (fs::exists(final_path, fs_ec) || fs::exists(temp_path, fs_ec)) {
         reject("File already exists or is already being received");
         return;
@@ -228,6 +228,7 @@ private:
     PacketHeader ack_header_{};
     uint8_t ack_status_ = 0;
     shared_ptr<SSLStream> socket_;
+    fs::path save_dir_;
     PacketHeader header_{};
     string raw_name_;
     string safe_name_;

@@ -76,48 +76,87 @@ private:
     }
 
     void prepare_and_send_header() {
-        try {
-            uint64_t file_size = FileStreamer::get_file_size(file_path_);
-            auto file_hash = FileStreamer::compute_sha256(file_path_);
-            string file_name = std::filesystem::path(file_path_).filename().string();
-            header_.msg_type = static_cast<uint8_t>(MessageType::METADATA);
-            header_.payload_len = boost::endian::native_to_big(static_cast<uint32_t>(file_name.length()));
-            header_.total_file_size = boost::endian::native_to_big(file_size);
-            header_.filename_len = boost::endian::native_to_big(static_cast<uint16_t>(file_name.length()));
-            memcpy(header_.file_hash,file_hash.data(),32);
-            cout << "[CLIENT] Sending 47-byte PacketHeader..." << "\n";
+    try {
+        uint64_t file_size = FileStreamer::get_file_size(file_path_);
+        auto file_hash = FileStreamer::compute_sha256(file_path_);
+        file_name_ = std::filesystem::path(file_path_).filename().string();
 
-            net::async_write(ssl_socket_,net::buffer(&header_,sizeof(PacketHeader)),
-                [self = shared_from_this(),file_name](const boost::system::error_code& ec,size_t ) {
-                    if (!ec) {
-                        self->send_filename_payload(file_name);
-                    }
-                    else {
-                        cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << "\n";
-                    }
-                }
-                );
+        header_.msg_type = static_cast<uint8_t>(MessageType::METADATA);
+        header_.payload_len = boost::endian::native_to_big(static_cast<uint32_t>(file_name_.length()));
+        header_.total_file_size = boost::endian::native_to_big(file_size);
+        header_.filename_len = boost::endian::native_to_big(static_cast<uint16_t>(file_name_.length()));
+        memcpy(header_.file_hash, file_hash.data(), 32);
+        cout << "[CLIENT] Sending 47-byte PacketHeader...\n";
 
-
-        } catch (const exception& e) {
-            cerr << "[CLIENT ERROR] File prep failed: " << e.what() << "\n";
-        }
-    }
-
-    void send_filename_payload(const string& file_name) {
-        net::async_write(ssl_socket_,net::buffer(file_name),
-            [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
+        net::async_write(ssl_socket_, net::buffer(&header_, sizeof(PacketHeader)),
+            [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
                 if (!ec) {
-                    cout << "[CLIENT] Header & Metadata sent. Starting file payload stream..." << "\n";
-                    self->open_file_and_stream();
+                    self->send_filename_payload();
+                } else {
+                    cerr << "[CLIENT ERROR] Failed to send header: " << ec.message() << '\n';
                 }
-                else {
-                    cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << "\n";
-                }
-            }
-
-        );
+            });
+    } catch (const exception& e) {
+        cerr << "[CLIENT ERROR] File prep failed: " << e.what() << '\n';
     }
+}
+
+void send_filename_payload() {
+    net::async_write(ssl_socket_, net::buffer(file_name_),
+        [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
+            if (!ec) {
+                cout << "[CLIENT] Header & metadata sent. Starting file payload stream...\n";
+                self->open_file_and_stream();
+            } else {
+                cerr << "[CLIENT ERROR] Failed to send filename payload: " << ec.message() << '\n';
+            }
+        });
+}
+
+void send_end_of_file_signal() {
+    std::memset(&eof_header_, 0, sizeof(PacketHeader));
+    eof_header_.msg_type = static_cast<uint8_t>(MessageType::END_OF_FILE);
+
+    net::async_write(ssl_socket_, net::buffer(&eof_header_, sizeof(PacketHeader)),
+        [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
+            if (ec) {
+                cerr << "[CLIENT ERROR] Failed to send EOF packet: " << ec.message() << '\n';
+                return;
+            }
+            cout << "[CLIENT] EOF packet delivered. Waiting for the receiver's verdict...\n";
+            self->read_ack();
+        });
+}
+
+void read_ack() {
+    net::async_read(ssl_socket_, net::buffer(&ack_header_, sizeof(PacketHeader)),
+        [self = shared_from_this()](const boost::system::error_code& ec, size_t) {
+            if (ec) {
+                cerr << "[CLIENT ERROR] No ACK received: " << ec.message() << '\n';
+                return;
+            }
+            if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
+                boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
+                cerr << "[CLIENT ERROR] Malformed ACK from receiver\n";
+                return;
+            }
+            net::async_read(self->ssl_socket_, net::buffer(&self->ack_status_, 1),
+                [self](const boost::system::error_code& ec2, size_t) {
+                    if (ec2) {
+                        cerr << "[CLIENT ERROR] Failed to read ACK status: " << ec2.message() << '\n';
+                        return;
+                    }
+                    switch (static_cast<AckStatus>(self->ack_status_)) {
+                        case AckStatus::OK:
+                            cout << "[CLIENT] Receiver confirmed: file verified and saved!\n"; break;
+                        case AckStatus::HASH_MISMATCH:
+                            cerr << "[CLIENT] Receiver says the hash did NOT match. File discarded.\n"; break;
+                        default:
+                            cerr << "[CLIENT] Receiver hit an error and could not save the file.\n"; break;
+                    }
+                });
+        });
+}
 
 
     void stream_next_chunk() {
@@ -149,19 +188,10 @@ private:
         stream_next_chunk();
     }
 
-    void send_end_of_file_signal() {
-        // Send a lightweight EOF header to signal transfer completion
-        auto eof_header = std::make_shared<PacketHeader>();
-        std::memset(eof_header.get(), 0, sizeof(PacketHeader));
-        eof_header->msg_type = static_cast<uint8_t>(MessageType::END_OF_FILE);
-
-        net::async_write(ssl_socket_, net::buffer(eof_header.get(), sizeof(PacketHeader)),
-            [self = shared_from_this()](const boost::system::error_code& ec, std::size_t) {
-                if (!ec) {
-                    std::cout << "[CLIENT] EOF packet delivered successfully." << "\n";
-                }
-            });
-    }
+    string file_name_;
+    PacketHeader eof_header_{};
+    PacketHeader ack_header_{};
+    uint8_t ack_status_ = 0;
     tcp::resolver resolver_;
     SSLStream ssl_socket_;
     string file_path_;

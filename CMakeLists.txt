@@ -12,6 +12,8 @@ add_executable(P2P_Secure_File_Sharing main.cpp
         file_streaming.hpp
         client_node.hpp
         server_session.hpp
+        server_node.hpp
+        server_node.hpp
 )
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/server.crt DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/server.key DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
