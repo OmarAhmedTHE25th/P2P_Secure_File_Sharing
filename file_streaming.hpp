@@ -36,8 +36,8 @@ public:
             throw runtime_error("FleStreamer: Failed to initialize SHA256 Digest");
         }
         vector<char> BUFFER(CHUNK_SIZE);
-        while (file.read(BUFFER.data(),!BUFFER.empty() || file.gcount() > 0)) {
-            if (EVP_DigestUpdate(md_ctx.get(),BUFFER.data(),file.gcount()) != 1) {
+        while (file.read(BUFFER.data(), BUFFER.size()) || file.gcount() > 0) {
+            if (EVP_DigestUpdate(md_ctx.get(), BUFFER.data(), static_cast<size_t>(file.gcount())) != 1) {
                 throw runtime_error("FileStreamer: Failed to update SHA256 digest block");
             }
         }

@@ -6,10 +6,10 @@
 #include <string>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
-#include <endian.h>
+#include <boost/endian/conversion.hpp>
 #include "protocol.hpp"
 #include "file_streaming.hpp"
-
+#include <filesystem>
 using std::cout;
 using std::cerr;
 using std::endl;
@@ -35,6 +35,7 @@ public:
 
     void send_file(const string& port,const string& host,const string& file_path) {
         file_path_ = file_path;
+        ssl_socket_.set_verify_callback(net::ssl::host_name_verification(host));
         resolver_.async_resolve(host,port,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::resolver::results_type& endpoints) {
                 if (!ec) {
@@ -79,11 +80,11 @@ private:
         try {
             uint64_t file_size = FileStreamer::get_file_size(file_path_);
             auto file_hash = FileStreamer::compute_sha256(file_path_);
-            string file_name = file_path_.substr(file_path_.find_last_of("/\\"));
+            string file_name = std::filesystem::path(file_path_).filename().string();
             header_.msg_type = static_cast<uint8_t>(MessageType::METADATA);
-            header_.payload_len = htobe32(static_cast<uint32_t>(file_name.length()));
-            header_.total_file_size = htobe64(file_size);
-            header_.filename_len = htobe16(static_cast<uint16_t>(file_name.length()));
+            header_.payload_len = boost::endian::native_to_big(static_cast<uint32_t>(file_name.length()));
+            header_.total_file_size = boost::endian::native_to_big(file_size);
+            header_.filename_len = boost::endian::native_to_big(static_cast<uint16_t>(file_name.length()));
             memcpy(header_.file_hash,file_hash.data(),32);
             cout << "[CLIENT] Sending 47-byte PacketHeader..." << endl;
 

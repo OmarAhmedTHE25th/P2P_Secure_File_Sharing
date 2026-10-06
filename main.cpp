@@ -15,8 +15,8 @@ ssl_ctx.set_options(
     boost::asio::ssl::context::no_sslv3 |
     boost::asio::ssl::context::single_dh_use
     );
-    ssl_ctx.use_certificate_chain_file("server.crt");
-    ssl_ctx.use_private_key_file("server.key", boost::asio::ssl::context::pem);
+    ssl_ctx.set_verify_mode(boost::asio::ssl::verify_peer);
+    ssl_ctx.load_verify_file("server.crt");
 }
 int main() {
     try {
@@ -67,8 +67,8 @@ int main() {
                                     [ssl_socket, header](const boost::system::error_code& ec, std::size_t) {
                                         if (!ec) {
                                             cout << "[SERVER] Received 47-byte protocol header!" << endl;
-                                            cout << "[SERVER] Payload size to follow: " << ntohl(header->payload_len) << " bytes" << endl;
-                                            cout << "[SERVER] File total size: " << be64toh(header->total_file_size) << " bytes" << endl;
+                                            cout << "[SERVER] Payload size to follow: " << boost::endian::big_to_native(header->payload_len) << " bytes" << endl;
+                                            cout << "[SERVER] File total size: " << boost::endian::big_to_native(header->total_file_size) << " bytes" << endl;
                                         } else {
                                             cerr << "[SERVER ERROR] Failed to read header: " << ec.message() << endl;
                                         }
