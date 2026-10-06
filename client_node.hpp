@@ -30,7 +30,7 @@ using tcp = net::ip::tcp;
 class ClientNode : public enable_shared_from_this<ClientNode> {
 public:
     using SSLStream = net::ssl::stream<tcp::socket>;
-    ClientNode(net::io_context& io_ctx,net::ssl::context ssl_ctx): resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx){};
+    ClientNode(net::io_context& io_ctx,net::ssl::context& ssl_ctx): resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx){};
 
 
     void send_file(const string& port,const string& host,const string& file_path) {
