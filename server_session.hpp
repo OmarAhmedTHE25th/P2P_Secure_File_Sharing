@@ -17,6 +17,7 @@
 #include <openssl/evp.h>
 #include <openssl/crypto.h>
 #include "file_streaming.hpp"
+#include "validation.hpp"
 
 using std::cout;
 using std::cerr;
@@ -32,8 +33,6 @@ namespace fs = std::filesystem;
 class ServerSession : public enable_shared_from_this<ServerSession> {
 public:
     using SSLStream = net::ssl::stream<net::ip::tcp::socket>;
-    static constexpr uint16_t MAX_FILE_LEN = 255;
-    static constexpr uint64_t MAX_FILE_SIZE = 10ULL * 1024 * 1024 * 1024;
     ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir)
      : socket_(std::move(socket)), 
        save_dir_(std::move(save_dir)),
@@ -88,52 +87,20 @@ private:
         );
     }
     void handle_header() {
-        if (header_.msg_type != static_cast<uint8_t> (MessageType::METADATA)) {
-            cerr << "Unexpected Message type,";
-            reject(AckStatus::BAD_REQUEST, "Expected METADATA packet");
+        const AckStatus verdict = validation::check_metadata_header(header_);
+        if (verdict != AckStatus::READY) {
+            reject(verdict, describe(verdict));
             return;
         }
-        const uint64_t payload_len = boost::endian::big_to_native(header_.payload_len);
-        const uint32_t filename_len = boost::endian::big_to_native(header_.filename_len);
         file_size_ = boost::endian::big_to_native(header_.total_file_size);
-        if (filename_len == 0 || filename_len > MAX_FILE_LEN || payload_len != filename_len) {
-            cerr << "Invalid Filename Length";
-            reject(AckStatus::BAD_REQUEST, "Invalid filename length or metadata payload length");
-            return;
-        }
-        if (file_size_ > MAX_FILE_SIZE) {
-            reject(AckStatus::FILE_TOO_LARGE, "File too large");
-            return;
-        }
+        const uint16_t filename_len = boost::endian::big_to_native(header_.filename_len);
+
         cout << "[SERVER] Header OK. Filename length: " << filename_len
-                  << ", file size: " << file_size_ << " bytes" << "\n";
+             << ", file size: " << file_size_ << " bytes" << "\n";
         raw_name_.resize(filename_len);
         read_filename();
     }
-    static bool sanitize_file_name(const string & raw_name, string& clean_name) {
-        if (raw_name.find('\000' ) != string::npos) return false;
-        clean_name = fs::path(raw_name).filename().string();
-        std::string base = clean_name;
-        auto dot_pos = base.find('.');
-        if (dot_pos != std::string::npos) {
-            base = base.substr(0, dot_pos);
-        }
 
-        std::ranges::transform(base, base.begin(),
-                               [](unsigned char c) { return std::toupper(c); });
-
-        if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
-            base == "COM1" || base == "COM2" || base == "COM3" ||
-            base == "COM4" || base == "COM5" || base == "COM6" ||
-            base == "COM7" || base == "COM8" || base == "COM9" ||
-            base == "LPT1" || base == "LPT2" || base == "LPT3" ||
-            base == "LPT4" || base == "LPT5" || base == "LPT6" ||
-            base == "LPT7" || base == "LPT8" || base == "LPT9") {
-            return false;
-        }
-        return !clean_name.empty() && clean_name != "." && clean_name != ".." && clean_name == raw_name;
-    }
-    
     void read_filename() {
         net::async_read(*socket_,net::buffer(raw_name_),
             [self = shared_from_this()](const boost::system::error_code& ec,size_t) {
@@ -143,7 +110,7 @@ private:
                     return;
                 }
                 self->reset_timeout();
-                if (!sanitize_file_name(self -> raw_name_,self -> safe_name_)) {
+                if (!validation::sanitize_file_name(self->raw_name_, self->safe_name_)) {
                     self->reject(AckStatus::UNSAFE_FILENAME, "Unsafe Filename");
                     return;
                 }
@@ -286,6 +253,7 @@ private:
     }
 
     void shutdown_tls() {
+        timer_.cancel();
         socket_->async_shutdown(
             [self = shared_from_this()](const boost::system::error_code& ec) {
                 boost::system::error_code ignored_ec;
@@ -294,7 +262,9 @@ private:
 
                 if (ec && ec != net::error::eof &&
                     ec != boost::asio::ssl::error::stream_truncated &&
-                    ec != net::error::operation_aborted) {
+                    ec != net::error::operation_aborted &&
+                    ec != net::error::connection_reset
+                    ) {
                     std::cerr << "[SERVER ERROR] TLS shutdown failed: " << ec.message() << '\n';
                 }
             });

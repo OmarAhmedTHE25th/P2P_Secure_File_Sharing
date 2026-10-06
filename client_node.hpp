@@ -48,6 +48,12 @@ public:
     }
 
 private:
+
+    void finish() {
+        timer_.cancel();
+        boost::system::error_code ignored_ec;
+        ssl_socket_.lowest_layer().close(ignored_ec);
+    }
     void start_timeout() {
         timer_.expires_after(std::chrono::seconds(30));
         timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
@@ -150,6 +156,7 @@ void send_end_of_file_signal() {
     } else {
         cerr << "[CLIENT] Transfer failed: " << describe(status) << '\n';
     }
+                self->finish();
 });
         });
 }
@@ -170,6 +177,7 @@ void send_filename_payload() {
                     self->open_file_and_stream();
                 } else {
                     cerr << "[CLIENT] Receiver refused the transfer: " << describe(status) << '\n';
+
                 }
             });
         });
