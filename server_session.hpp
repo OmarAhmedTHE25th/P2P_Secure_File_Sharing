@@ -24,6 +24,7 @@ class ServerSession : public enable_shared_from_this<ServerSession> {
 public:
     using SSLStream = net::ssl::stream<net::ip::tcp::socket>;
     static constexpr uint16_t MAX_FILE_LEN = 255;
+    static constexpr uint64_t MAX_FILE_SIZE = 10ULL * 1024 * 1024 * 1024;
     explicit ServerSession(shared_ptr<SSLStream> socket) : socket_(std::move(socket)){}
 
     void start () {read_header();}
@@ -50,6 +51,10 @@ private:
         file_size_ = boost::endian::big_to_native(header_.total_file_size);
         if (filename_len == 0 || filename_len > MAX_FILE_LEN || payload_len != filename_len) {
             cerr << "Invalid Filename Length";
+            return;
+        }
+        if (file_size_ > MAX_FILE_SIZE) {
+            reject("File too large");
             return;
         }
         cout << "[SERVER] Header OK. Filename length: " << filename_len
