@@ -29,7 +29,7 @@ A secure, peer-to-peer file sharing application built with C++ using Boost.Asio 
 
 1. **Clone the repository:**
    ```bash
-   git clone <repo-url>
+   git clone https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing.git
    cd P2P_Secure_File_Sharing
    ```
 
@@ -78,11 +78,6 @@ Run as a node that can both receive and send files.
 - `send <host> <port> <file>`: Send a file to a one-time address.
 - `exit`: Safely close the program.
 
-## Environment Variables
-(TODO: Add environment variables if applicable, e.g., for certificate paths)
-
-## Tests
-(TODO: Add instructions for running tests if a test suite is implemented)
 
 ## Project Structure
 
@@ -92,7 +87,6 @@ Run as a node that can both receive and send files.
 - `client_node.hpp`: Client-side connection handling.
 - `protocol.hpp`: Communication protocol definitions.
 - `file_streaming.hpp`: Utilities for file I/O and streaming.
-- `USER_GUIDE.md`: Detailed user-facing guide.
 - `CMakeLists.txt`: Build configuration.
 
 ## License
