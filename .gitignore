@@ -1,0 +1,19 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+out/
+
+# IDE files
+.idea/
+.vscode/
+
+# Development certificates. NEVER commit a private key. Generate your own:
+#   bash scripts/gen_certs.sh
+server.key
+server.crt
+*.pem
+
+# Files created by running the program
+received/
+*.part
