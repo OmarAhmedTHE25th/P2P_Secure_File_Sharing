@@ -231,8 +231,6 @@ Every control message is a fixed **47-byte header**; all numbers are big-endian.
 
 ## Known limitations
 
-These are real, and I would rather list them than hide them.
-
 **Authentication is shared, not per peer.** Today the same `server.crt` is both every node's identity and the only certificate every node trusts. In practice all peers must share one certificate **and private key**. That means:
 - Anyone who has the key is indistinguishable from any legitimate peer, and can also impersonate any peer to any other.
 - There is no way to revoke a single peer.
