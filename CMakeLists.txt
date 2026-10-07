@@ -6,6 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)   # we don't use C++20 modules; skips a scanner step that Clang+Ninja needs extra tools for
 
 option(P2P_BUILD_TESTS "Build the unit tests" ON)
+option(P2P_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer (GCC/Clang only)" OFF)
+
+# Sanitizers add extra checks that turn silent memory bugs (buffer overflows, use-after-free,
+# signed overflow, ...) into loud crashes. Must be set before the targets are created.
+if(P2P_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "P2P_SANITIZE needs GCC or Clang")
+    endif()
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 # Find system OpenSSL and Boost packages
 find_package(OpenSSL REQUIRED)
@@ -36,6 +47,20 @@ target_link_libraries(P2P_Secure_File_Sharing PRIVATE
         OpenSSL::Crypto
         Boost::system
 )
+
+# ---------------- Fuzzing (Clang only) ----------------
+# Fuzzes the header checks and filename sanitizer with libFuzzer. See the README.
+option(P2P_BUILD_FUZZERS "Build the libFuzzer fuzz targets (Clang only)" OFF)
+if(P2P_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "P2P_BUILD_FUZZERS needs Clang (it uses libFuzzer)")
+    endif()
+    add_executable(fuzz_validation fuzz/fuzz_validation.cpp)
+    target_include_directories(fuzz_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(fuzz_validation PRIVATE -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined -O1 -g)
+    target_link_options(fuzz_validation PRIVATE -fsanitize=fuzzer,address,undefined)
+    target_link_libraries(fuzz_validation PRIVATE Boost::system)
+endif()
 
 # ---------------- Unit tests ----------------
 if(P2P_BUILD_TESTS)

@@ -66,6 +66,10 @@ void print_usage(const char* program) {
 #include <thread>
 
 int main(int argc, char* argv[]) {
+#ifndef _WIN32
+    // Write each log line immediately, even when output is redirected to a file or pipe
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+#endif
     try {
         if (argc < 2) { print_usage(argv[0]); return 1; }
         const std::string mode = argv[1];

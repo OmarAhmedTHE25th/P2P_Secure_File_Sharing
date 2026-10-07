@@ -44,3 +44,61 @@ jobs:
 
       - name: Unit tests and end-to-end test
         run: ctest --test-dir build --output-on-failure
+
+  # Same tests, but compiled with AddressSanitizer + UBSan: memory bugs and undefined
+  # behaviour become loud failures instead of silent corruption
+  sanitizers:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libboost-dev libboost-system-dev libssl-dev
+
+      - name: Generate development certificates
+        run: bash scripts/gen_certs.sh
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DP2P_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Unit tests and end-to-end test under sanitizers
+        run: ctest --test-dir build --output-on-failure
+
+  # Feeds the header checks and filename sanitizer random inputs for a minute.
+  # If it finds one that breaks a rule, the input is saved as a downloadable artifact.
+  fuzz:
+    name: Fuzz (60 s)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-dev ninja-build libboost-dev libboost-system-dev libssl-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++ -DP2P_BUILD_TESTS=OFF -DP2P_BUILD_FUZZERS=ON
+
+      - name: Build the fuzzer
+        run: cmake --build build --target fuzz_validation
+
+      - name: Fuzz for 60 seconds
+        run: |
+          mkdir -p corpus-work fuzz-artifacts
+          ./build/fuzz_validation corpus-work fuzz/seeds -max_total_time=60 -artifact_prefix=fuzz-artifacts/
+
+      - name: Save the crashing input, if any
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash
+          path: fuzz-artifacts/

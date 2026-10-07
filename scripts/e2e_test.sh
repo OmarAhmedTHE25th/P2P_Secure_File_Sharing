@@ -30,12 +30,7 @@ mkdir -p "$work/node"
 cd "$work/node" || exit 2
 CERT_DIR="$work/node" bash "$here/gen_certs.sh" >/dev/null || { echo "could not generate certs"; exit 2; }
 
-# When output goes to a file the program buffers it; stdbuf makes it write line by line,
-# so we can see "Listening" (and, if something fails, the full log) right away.
-line_buffered=()
-if command -v stdbuf >/dev/null 2>&1; then line_buffered=(stdbuf -oL -eL); fi
-
-${line_buffered[@]+"${line_buffered[@]}"} "$exe" receive "$port" received > receiver.log 2>&1 &
+"$exe" receive "$port" received > receiver.log 2>&1 &
 receiver_pid=$!
 for _ in $(seq 1 50); do
     grep -q "Listening on port" receiver.log 2>/dev/null && break
@@ -53,6 +48,9 @@ printf 'x' > CON.txt
 send() {
     out="$(timeout 20 "$exe" send localhost "$port" "$1" 2>&1)"
     code=$?
+    if grep -qE "Sanitizer|runtime error" <<< "$out"; then
+        fail "sanitizer report in the client output for $1: $out"
+    fi
 }
 
 echo "End-to-end test on port $port"
@@ -79,6 +77,10 @@ if grep -q "filename not allowed" <<< "$out"; then pass "reserved filename CON.t
 if [[ -e received/CON.txt ]]; then fail "CON.txt was written to disk anyway"; else pass "refused file never touched the disk"; fi
 
 if ls received/*.part >/dev/null 2>&1; then fail "leftover .part files in received/"; else pass "no leftover .part files"; fi
+
+# Did anything crash or trip a sanitizer along the way? (sanitizer builds print these)
+if ! kill -0 "$receiver_pid" 2>/dev/null; then fail "the receiver process died during the test"; fi
+if grep -qE "Sanitizer|runtime error" receiver.log; then fail "sanitizer report in the receiver log"; fi
 
 if [[ $failures -eq 0 ]]; then
     echo "ALL END-TO-END CHECKS PASSED"

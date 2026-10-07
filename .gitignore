@@ -17,3 +17,11 @@ server.crt
 # Files created by running the program
 received/
 *.part
+
+# Fuzzing output
+corpus-work/
+fuzz-artifacts/
+crash-*
+leak-*
+timeout-*
+oom-*
