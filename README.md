@@ -119,17 +119,16 @@ Two nodes on one machine (use different ports and different save folders):
 ### Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Node["One process"]
-        main["main.cpp<br/>arguments and modes"]
-        p2p["P2PNode<br/>address book and commands"]
-        srv["ServerNode<br/>accepts connections, TLS handshake"]
-        sess["ServerSession<br/>one per sender"]
-        cli["ClientNode<br/>one per outgoing transfer"]
-        val["validation.hpp<br/>header and file name checks"]
-        fs["file_streaming.hpp<br/>SHA-256 and file size"]
-        proto["protocol.hpp<br/>wire format"]
-    end
+flowchart TD
+    main["main.cpp: modes and arguments"]
+    p2p["P2PNode: address book and commands"]
+    srv["ServerNode: accepts connections, TLS handshake"]
+    sess["ServerSession: one per incoming sender"]
+    cli["ClientNode: one per outgoing transfer"]
+    val["validation.hpp: header and file name checks"]
+    fstream["file_streaming.hpp: SHA-256 and file size"]
+    proto["protocol.hpp: wire format"]
+    peer["Another peer running the same program"]
 
     main --> p2p
     main --> srv
@@ -138,12 +137,13 @@ flowchart LR
     p2p --> cli
     srv --> sess
     sess --> val
-    sess --> fs
-    cli --> fs
+    sess --> fstream
+    cli --> fstream
     sess --> proto
     cli --> proto
     val --> proto
-    cli <-->|"TLS 1.3 (mutual)"| srv
+    cli -->|"TLS 1.3, mutual"| peer
+    peer -->|"TLS 1.3, mutual"| srv
 ```
 
 Everything runs on Boost.Asio's asynchronous I/O. `ServerNode` accepts a connection, completes the TLS handshake, and hands the connection to a new `ServerSession`, then immediately goes back to accepting. Each session is its own small state machine, so several senders can upload at once. `validation.hpp` is deliberately plain functions with no sockets or disk access, which is what makes it easy to unit test and fuzz.
