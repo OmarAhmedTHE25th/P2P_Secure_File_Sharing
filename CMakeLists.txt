@@ -25,13 +25,17 @@ find_package(Boost REQUIRED COMPONENTS system)
 add_executable(P2P_Secure_File_Sharing main.cpp
         protocol.hpp
         validation.hpp
+        disk_budget.hpp
+        trust_store.hpp
+        identity.hpp
+        cli_identity.hpp
+        tls_trust.hpp
         file_streaming.hpp
         client_node.hpp
         server_session.hpp
         server_node.hpp
         p2p_node.hpp
 )
-
 
 target_link_libraries(P2P_Secure_File_Sharing PRIVATE
         OpenSSL::SSL
@@ -68,21 +72,21 @@ if(P2P_BUILD_TESTS)
     add_executable(unit_tests
         tests/test_protocol.cpp
         tests/test_validation.cpp
-        tests/test_hashing.cpp
+        tests/test_disk_budget.cpp
         tests/test_trust_store.cpp
         tests/test_identity.cpp
-        tests/test_e2e_trust.cpp
+        tests/test_tls_trust.cpp
+        tests/test_hashing.cpp
     )
     target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(unit_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto Boost::system)
+    target_link_libraries(unit_tests PRIVATE GTest::gtest_main OpenSSL::Crypto Boost::system)
 
     include(GoogleTest)
     gtest_discover_tests(unit_tests)
 
-# ---------------- E2E Test ----------------
-# Real transfer over TLS on localhost (needs bash, openssl and timeout, so Linux only)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh)
-    add_test(NAME end_to_end
-             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh $<TARGET_FILE:P2P_Secure_File_Sharing>)
-endif()
+    # Real transfer over TLS on localhost (needs bash, openssl and timeout, so Linux only)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME end_to_end
+                 COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh $<TARGET_FILE:P2P_Secure_File_Sharing>)
+    endif()
 endif()

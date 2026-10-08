@@ -52,7 +52,7 @@ inline std::string display_fingerprint(const std::string& normalized) {
 inline bool valid_name(std::string_view name) {
     if (name.empty() || name.size() > 64) return false;
     for (char c : name) {
-        const unsigned char uc = static_cast<unsigned char>(c);
+        const auto uc = static_cast<unsigned char>(c);
         if (!(std::isalnum(uc) || c == '.' || c == '_' || c == '-')) return false;
     }
     return true;
