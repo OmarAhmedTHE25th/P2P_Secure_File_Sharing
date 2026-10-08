@@ -7,7 +7,7 @@
 #include <boost/asio/ssl.hpp>
 #include "client_node.hpp"
 #include "server_node.hpp"
-
+#include "cli_identity.hpp"
 namespace {
 
 void configure_server_mode(net::ssl::context& ssl_ctx) {
@@ -54,10 +54,12 @@ uint16_t parse_port(const std::string& text) {
     return static_cast<uint16_t>(value);
 }
 
-void print_usage(const char* program) {
+    void print_usage(const char* program) {
     std::cerr << "Usage:\n"
               << "  " << program << " receive <port> [save_folder]\n"
-              << "  " << program << " send <host> <port> <file>\n";
+              << "  " << program << " send <host> <port> <file>\n"
+              << "  " << program << " p2p <port> [save_folder]\n";
+    cli::print_identity_usage(program);
 }
 
 } // namespace
@@ -73,6 +75,10 @@ int main(int argc, char* argv[]) {
     try {
         if (argc < 2) { print_usage(argv[0]); return 1; }
         const std::string mode = argv[1];
+        // init, fingerprint and trust: manage your identity and who you trust
+        const int identity_result = cli::handle_identity_command(
+            std::vector<std::string>(argv + 1, argv + argc), "P2P_Secure_File_Sharing");
+        if (identity_result >= 0) return identity_result;
         net::io_context io_ctx;
 
         if (mode == "p2p" && argc >= 3) {

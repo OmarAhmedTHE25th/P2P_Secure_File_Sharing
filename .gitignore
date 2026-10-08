@@ -13,6 +13,9 @@ out/
 server.key
 server.crt
 *.pem
+identity.key
+identity.crt
+trusted_peers.txt
 
 # Files created by running the program
 received/

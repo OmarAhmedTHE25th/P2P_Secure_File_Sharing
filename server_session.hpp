@@ -18,6 +18,7 @@
 #include <openssl/crypto.h>
 #include "file_streaming.hpp"
 #include "validation.hpp"
+#include "disk_budget.hpp"
 
 using std::cout;
 using std::cerr;
@@ -33,10 +34,14 @@ namespace fs = std::filesystem;
 class ServerSession : public enable_shared_from_this<ServerSession> {
 public:
     using SSLStream = net::ssl::stream<net::ip::tcp::socket>;
-    ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir)
-     : socket_(std::move(socket)), 
+    ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir, std::shared_ptr<void> connection_slot,
+                  std::shared_ptr<DiskBudget> disk_budget)
+     : socket_(std::move(socket)),
        save_dir_(std::move(save_dir)),
-       timer_(socket_->get_executor()) {}
+       timer_(socket_->get_executor()),
+       connection_slot_(std::move(connection_slot)),
+       disk_budget_(std::move(disk_budget)) {}
+
     ~ServerSession() {
         timer_.cancel();
         if (part_file_.is_open()) part_file_.close();
@@ -131,7 +136,12 @@ private:
         reject(AckStatus::ALREADY_EXISTS, "File already exists or is already being received");
         return;
     }
-
+        // Make sure the disk has room for this upload AND for the uploads already in progress
+        const auto space_info = fs::space(save_dir_, fs_ec);
+        if (fs_ec) { reject(AckStatus::SERVER_ERROR, "Cannot check free disk space"); return; }
+        auto reservation = disk_budget_->try_reserve(file_size_, space_info.available);
+        if (!reservation) { reject(AckStatus::NO_SPACE, "Not enough disk space"); return; }
+        reservation_ = std::move(*reservation);
     part_file_.open(temp_path, std::ios::binary);
     if (!part_file_.is_open()) { reject(AckStatus::SERVER_ERROR, "Cannot open temp file"); return; }
 
@@ -182,6 +192,7 @@ private:
         if (!part_file_) { reject(AckStatus::SERVER_ERROR, "Disk write failed"); return; }
         if (EVP_DigestUpdate(hash_ctx_.get(), buffer_.data(), n) != 1) { reject(AckStatus::SERVER_ERROR, "Hash update failed"); return; }
         bytes_received_ += n;
+        reservation_.written(n);   // these bytes are on the disk now, no longer "still to come"
         read_next_chunk();
     }
 
@@ -309,6 +320,9 @@ private:
     string raw_name_;
     string safe_name_;
     uint64_t file_size_ = 0;
+    std::shared_ptr<void> connection_slot_;
+    std::shared_ptr<DiskBudget> disk_budget_;
+    DiskBudget::Reservation reservation_;
 };
 
 

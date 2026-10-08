@@ -78,6 +78,53 @@ if [[ -e received/CON.txt ]]; then fail "CON.txt was written to disk anyway"; el
 
 if ls received/*.part >/dev/null 2>&1; then fail "leftover .part files in received/"; else pass "no leftover .part files"; fi
 
+echo "Connection limits (this part takes about 12 seconds)"
+# Needs python3 for raw sockets. MAX must match ServerNode::MAX_CONNECTIONS in server_node.hpp.
+limits_result="$(timeout 60 python3 - "$port" 2>&1 <<'PY'
+import socket, sys, time
+port = int(sys.argv[1])
+MAX = 64
+
+def closed_by_peer(s):
+    s.setblocking(False)
+    try:
+        return s.recv(1) == b''
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+# 1) More connections than seats: the first MAX are kept, the extras are dropped at once
+socks = [socket.create_connection(('localhost', port)) for _ in range(MAX + 6)]
+time.sleep(1.5)
+kept = sum(1 for s in socks[:MAX] if not closed_by_peer(s))
+dropped = sum(1 for s in socks[MAX:] if closed_by_peer(s))
+for s in socks:
+    s.close()
+if kept != MAX or dropped != 6:
+    print(f"connection limit: {kept}/{MAX} kept, {dropped}/6 extras dropped")
+    sys.exit(1)
+time.sleep(1)
+
+# 2) A peer that connects and never says anything gets hung up on
+s = socket.create_connection(('localhost', port))
+start = time.time()
+while time.time() - start < 15:
+    if closed_by_peer(s):
+        break
+    time.sleep(0.2)
+else:
+    print("a silent peer was not hung up on within 15 seconds")
+    sys.exit(1)
+print("ok")
+PY
+)"
+if [[ "$limits_result" == "ok" ]]; then
+    pass "connections beyond the limit are dropped, and a silent peer is hung up on"
+else
+    fail "connection limits: $limits_result"
+fi
+
 # Did anything crash or trip a sanitizer along the way? (sanitizer builds print these)
 if ! kill -0 "$receiver_pid" 2>/dev/null; then fail "the receiver process died during the test"; fi
 if grep -qE "Sanitizer|runtime error" receiver.log; then fail "sanitizer report in the receiver log"; fi

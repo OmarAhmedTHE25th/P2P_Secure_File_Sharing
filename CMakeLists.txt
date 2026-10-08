@@ -78,6 +78,8 @@ if(P2P_BUILD_TESTS)
         tests/test_protocol.cpp
         tests/test_validation.cpp
         tests/test_hashing.cpp
+            tests/test_trust_store.cpp
+            tests/test_identity.cpp
     )
     target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(unit_tests PRIVATE GTest::gtest_main OpenSSL::Crypto Boost::system)

@@ -25,10 +25,11 @@ This is also a security project, so besides how to use it, this README explains 
 
 - **Mutual TLS 1.3.** Only TLS 1.3 is accepted. The server refuses clients that do not present a certificate, and the client verifies the server's certificate and host name.
 - **End-to-end integrity.** The sender hashes the file with SHA-256 and sends the hash in the header. The receiver hashes what it actually wrote and only keeps the file if the two match.
+- **Disk protection.** Every upload reserves its space from one shared budget, so parallel uploads cannot fill the disk together, and 100 MiB is always left free.
 - **Safe receiving.** Files are written to a temporary `.part` file and renamed only after verification. Existing files are never overwritten, and a failed transfer leaves nothing behind.
 - **Strict input validation.** Header fields, file sizes and file names are checked against explicit rules before anything touches the disk.
 - **Clear refusals.** If the receiver says no, it says why (name not allowed, file too large, already exists, not enough disk space, ...), and the sender only starts streaming after an explicit "ready".
-- **Idle timeouts.** Connections that go quiet for 30 seconds are closed.
+- **Timeouts and limits.** A peer gets 10 seconds to finish the TLS handshake, connections that go quiet for 30 seconds are closed, and the receiver accepts at most 64 connections at once.
 - **P2P mode.** One process can receive and send at the same time, with an in-memory address book.
 - **Progress bars** on both sides.
 
@@ -119,17 +120,16 @@ Two nodes on one machine (use different ports and different save folders):
 ### Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Node["One process"]
-        main["main.cpp<br/>arguments and modes"]
-        p2p["P2PNode<br/>address book and commands"]
-        srv["ServerNode<br/>accepts connections, TLS handshake"]
-        sess["ServerSession<br/>one per sender"]
-        cli["ClientNode<br/>one per outgoing transfer"]
-        val["validation.hpp<br/>header and file name checks"]
-        fs["file_streaming.hpp<br/>SHA-256 and file size"]
-        proto["protocol.hpp<br/>wire format"]
-    end
+flowchart TD
+    main["main.cpp: modes and arguments"]
+    p2p["P2PNode: address book and commands"]
+    srv["ServerNode: accepts connections, TLS handshake"]
+    sess["ServerSession: one per incoming sender"]
+    cli["ClientNode: one per outgoing transfer"]
+    val["validation.hpp: header and file name checks"]
+    fstream["file_streaming.hpp: SHA-256 and file size"]
+    proto["protocol.hpp: wire format"]
+    peer["Another peer running the same program"]
 
     main --> p2p
     main --> srv
@@ -138,12 +138,13 @@ flowchart LR
     p2p --> cli
     srv --> sess
     sess --> val
-    sess --> fs
-    cli --> fs
+    sess --> fstream
+    cli --> fstream
     sess --> proto
     cli --> proto
     val --> proto
-    cli <-->|"TLS 1.3 (mutual)"| srv
+    cli -->|"TLS 1.3, mutual"| peer
+    peer -->|"TLS 1.3, mutual"| srv
 ```
 
 Everything runs on Boost.Asio's asynchronous I/O. `ServerNode` accepts a connection, completes the TLS handshake, and hands the connection to a new `ServerSession`, then immediately goes back to accepting. Each session is its own small state machine, so several senders can upload at once. `validation.hpp` is deliberately plain functions with no sockets or disk access, which is what makes it easy to unit test and fuzz.
@@ -218,10 +219,10 @@ Every control message is a fixed **47-byte header**; all numbers are big-endian.
 | Windows tricks (`CON`, `NUL.txt`, `file.txt:hidden` streams, trailing dots and spaces) | Explicit rules, the same on every OS | Unit tests, fuzzer |
 | Overwriting an existing file | Existing names (and in-progress `.part` files) are refused | End-to-end test |
 | Half-written or corrupt files appearing as real files | Write to `.part`, verify the hash, then rename; deleted on any failure | End-to-end test |
-| Claiming a huge file to fill the disk | 10 GB cap per file and a free-space check before accepting | Unit tests (size cap); the free-space check is not tested |
+| Claiming a huge file, or many files at once, to fill the disk | 10 GB cap per file, a shared disk budget that every upload must reserve its space from, and 100 MiB always kept free | Unit tests (size cap and disk budget); tried by hand on a real 20 MB disk |
 | Malformed or lying headers | Message type, lengths and sizes are validated; `payload_len` must equal `filename_len` | Unit tests, fuzzer |
 | Memory-safety bugs in the parsing code | Sanitizer builds (ASan, UBSan) run in CI; header and name validation are fuzzed | CI |
-| A peer that connects and then goes silent mid-conversation | 30-second idle timeout on both sides | Observed by hand |
+| A peer that connects and goes silent, or that opens a flood of connections | 10-second handshake timeout, 30-second idle timeout on both sides, and at most 64 simultaneous connections on the receiver | End-to-end test (limit and handshake timeout); idle timeout observed by hand |
 
 ### Out of scope (by design)
 
@@ -231,8 +232,6 @@ Every control message is a fixed **47-byte header**; all numbers are big-endian.
 
 ## Known limitations
 
-These are real, and I would rather list them than hide them.
-
 **Authentication is shared, not per peer.** Today the same `server.crt` is both every node's identity and the only certificate every node trusts. In practice all peers must share one certificate **and private key**. That means:
 - Anyone who has the key is indistinguishable from any legitimate peer, and can also impersonate any peer to any other.
 - There is no way to revoke a single peer.
@@ -241,9 +240,8 @@ These are real, and I would rather list them than hide them.
 Treat it as "a group of friends who trust each other with one key", not as strong per-user identity. Per-peer certificates and fingerprint pinning are the top roadmap item.
 
 **Denial of service is only partly handled.**
-- The TLS handshake itself has no timeout, so a client that connects and never finishes it can hold a connection open. The 30-second timer only starts once the handshake is done.
-- There is no cap on the number of simultaneous connections and no rate limiting.
-- Each upload checks free disk space on its own, so several uploads at once can pass the check individually and still fill the disk together.
+- The 64-connection limit and the 10-second handshake timeout are global, not per address. One machine that keeps reconnecting can still fill every seat and lock other peers out. There is no per-address limit and no rate limiting.
+- The disk budget only accounts for this program's own uploads. Another program writing to the same disk at the same time can still use up space the budget was counting on.
 - An aborted upload can leave its `.part` file in place until the 30-second idle timer fires. In my test runs it was removed after roughly 26 to 32 seconds.
 
 **File names.** The rules block dangerous characters, but file names are not checked for valid UTF-8 or Unicode normalization, and I have not tested non-ASCII names on Windows. Names starting with `.` and names longer than 200 bytes are refused on purpose.
@@ -261,8 +259,8 @@ Treat it as "a group of friends who trust each other with one key", not as stron
 
 | What | How | What it covers |
 |------|-----|----------------|
-| **Unit tests** (35, GoogleTest) | `ctest --test-dir build` | Header layout, SHA-256 against known vectors (including file sizes right on the 64 KB chunk boundary), header validation limits, and the file name rules |
-| **End-to-end test** | `ctest --test-dir build` (Linux) | Starts a real receiver and sends real files over TLS: random 500 KB, 1 byte, empty, a name with a space. Checks byte-for-byte equality, and that duplicates and `CON.txt` are refused and leave nothing behind |
+| **Unit tests** (48, GoogleTest) | `ctest --test-dir build` | Header layout, SHA-256 against known vectors (including file sizes right on the 64 KB chunk boundary), header validation limits, the file name rules, and the disk budget (parallel uploads, release on finish, free-space margin) |
+| **End-to-end test** | `ctest --test-dir build` (Linux) | Starts a real receiver and sends real files over TLS: random 500 KB, 1 byte, empty, a name with a space. Checks byte-for-byte equality, that duplicates and `CON.txt` are refused and leave nothing behind, that connections beyond the limit are dropped, and that a silent peer is hung up on (this test takes about 12 seconds) |
 | **Sanitizers** | `cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DP2P_SANITIZE=ON`, then build and `ctest` | All of the above with AddressSanitizer and UndefinedBehaviorSanitizer; any memory error or undefined behavior fails the run |
 | **Fuzzing** (libFuzzer) | see below | Header checks and file name sanitizer: random inputs are checked against rules that must hold for every input |
 
@@ -287,7 +285,7 @@ mkdir -p corpus-work
 
 If the fuzzer finds an input that breaks a rule, it prints `PROPERTY VIOLATED: <rule>` and saves the input as `crash-<hash>`; replay it with `./build-fuzz/fuzz_validation crash-<hash>`.
 
-Some security behavior is only **checked by hand so far**, not automated: a TLS 1.2 client is refused, a client with no certificate or with a different self-signed certificate is refused, a sender refuses a receiver whose certificate does not list the address it connected to, and a file sent with a wrong hash gets `HASH_MISMATCH` and leaves nothing on disk. Turning these into automated tests is on the roadmap.
+Some security behavior is only **checked by hand so far**, not automated: a TLS 1.2 client is refused, a client with no certificate or with a different self-signed certificate is refused, a sender refuses a receiver whose certificate does not list the address it connected to, and a file sent with a wrong hash gets `HASH_MISMATCH` and leaves nothing on disk, and two simultaneous uploads onto a disk too small for both get one accepted and one refused. Turning these into automated tests is on the roadmap.
 
 To make sure the fuzzer really can find bugs, I planted four on purpose one at a time (allowing `:` in names, dropping the length-match check, dropping the trailing-dot rule, dropping `CON` from the reserved list), and it caught each one within seconds. The fuzzer covers the validation logic only, not the network state machine.
 
@@ -314,9 +312,8 @@ scripts/e2e_test.sh   End-to-end transfer test
 ## Roadmap
 
 - Per-peer certificates with fingerprint pinning (trust on first use, like SSH `known_hosts`), replacing the single shared identity
-- Handshake timeout and a cap on concurrent connections
+- Per-address connection limits and rate limiting
 - Automated tests for the security behavior that is currently checked by hand
-- A global disk-space reservation so parallel uploads cannot fill the disk together
 - Persistent address book
 - Resume interrupted transfers; send folders
 - UTF-8 validation for file names, and testing on Windows
