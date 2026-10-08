@@ -17,12 +17,12 @@ void configure_server_mode(net::ssl::context& ssl_ctx) {
         net::ssl::context::no_sslv3 |
         net::ssl::context::single_dh_use
     );
-    ssl_ctx.use_certificate_chain_file("server.crt");
-    ssl_ctx.use_private_key_file("server.key", net::ssl::context::pem);
+    ssl_ctx.use_certificate_chain_file(identity::CERT_FILE);
+    ssl_ctx.use_private_key_file(identity::KEY_FILE, net::ssl::context::pem);
     
     // Mutual Auth
     ssl_ctx.set_verify_mode(net::ssl::verify_peer | net::ssl::verify_fail_if_no_peer_cert);
-    ssl_ctx.load_verify_file("server.crt"); // Using server.crt as CA for now
+    // We don't use load_verify_file with a CA anymore, we check fingerprints manually
 }
 
 void configure_client_mode(net::ssl::context& ssl_ctx) {
@@ -32,11 +32,9 @@ void configure_client_mode(net::ssl::context& ssl_ctx) {
         net::ssl::context::no_sslv3
     );
     ssl_ctx.set_verify_mode(net::ssl::verify_peer);
-    ssl_ctx.load_verify_file("server.crt");
-
     // Mutual Auth
-    ssl_ctx.use_certificate_chain_file("server.crt");
-    ssl_ctx.use_private_key_file("server.key", net::ssl::context::pem);
+    ssl_ctx.use_certificate_chain_file(identity::CERT_FILE);
+    ssl_ctx.use_private_key_file(identity::KEY_FILE, net::ssl::context::pem);
 }
 
 uint16_t parse_port(const std::string& text) {

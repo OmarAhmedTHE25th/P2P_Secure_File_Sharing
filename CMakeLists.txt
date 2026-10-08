@@ -32,15 +32,6 @@ add_executable(P2P_Secure_File_Sharing main.cpp
         p2p_node.hpp
 )
 
-# Copy the certificates next to the executable, if they exist.
-# (They are not in the repo on purpose: never commit a private key.)
-foreach(cert_file server.crt server.key)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${cert_file})
-        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${cert_file} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-    else()
-        message(WARNING "${cert_file} not found in the project root. Generate it before running the program.")
-    endif()
-endforeach()
 
 target_link_libraries(P2P_Secure_File_Sharing PRIVATE
         OpenSSL::SSL
@@ -78,18 +69,20 @@ if(P2P_BUILD_TESTS)
         tests/test_protocol.cpp
         tests/test_validation.cpp
         tests/test_hashing.cpp
-            tests/test_trust_store.cpp
-            tests/test_identity.cpp
+        tests/test_trust_store.cpp
+        tests/test_identity.cpp
+        tests/test_e2e_trust.cpp
     )
     target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(unit_tests PRIVATE GTest::gtest_main OpenSSL::Crypto Boost::system)
+    target_link_libraries(unit_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto Boost::system)
 
     include(GoogleTest)
     gtest_discover_tests(unit_tests)
 
-    # Real transfer over TLS on localhost (needs bash, openssl and timeout, so Linux only)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        add_test(NAME end_to_end
-                 COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh $<TARGET_FILE:P2P_Secure_File_Sharing>)
-    endif()
+# ---------------- E2E Test ----------------
+# Real transfer over TLS on localhost (needs bash, openssl and timeout, so Linux only)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh)
+    add_test(NAME end_to_end
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/e2e_test.sh $<TARGET_FILE:P2P_Secure_File_Sharing>)
+endif()
 endif()

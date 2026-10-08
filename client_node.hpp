@@ -9,6 +9,8 @@
 #include <boost/endian/conversion.hpp>
 #include "protocol.hpp"
 #include "file_streaming.hpp"
+#include "identity.hpp"
+#include "trust_store.hpp"
 #include <filesystem>
 using std::cout;
 using std::cerr;
@@ -81,6 +83,32 @@ private:
             [self = shared_from_this()](const boost::system::error_code& ec) {
                 if (!ec) {
                     self->reset_timeout();
+
+                    // Fingerprint verification
+                    X509* cert = SSL_get_peer_certificate(self->ssl_socket_.native_handle());
+                    if (!cert) {
+                        std::cerr << "[CLIENT] Server did not provide a certificate\n";
+                        boost::system::error_code ignored_ec;
+                        self->ssl_socket_.lowest_layer().close(ignored_ec);
+                        return;
+                    }
+
+                    std::string fp = identity::fingerprint_of(cert);
+                    X509_free(cert);
+
+                    trust::TrustStore store(identity::TRUST_FILE);
+                    auto name = store.find_name(fp);
+                    if (!name) {
+                        std::cerr << "[CLIENT] Server " << fp << " (not trusted) tried to connect. Refused.\n";
+                        std::cerr << "To trust this peer: P2P_Secure_File_Sharing trust add "
+                                  << fp << " <name>\n";
+                        boost::system::error_code ignored_ec;
+                        self->ssl_socket_.lowest_layer().close(ignored_ec);
+                        return;
+                    }
+
+                    std::cout << "[CLIENT] Connected to '" << *name << "' (fingerprint: "
+                              << fp << ")\n";
                     cout << "[CLIENT] TLS Handshake SUCCESS!!" << "\n";
                     self->prepare_and_send_header();
                 } else {

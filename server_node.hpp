@@ -9,6 +9,8 @@
 #include <boost/asio/ssl.hpp>
 #include "disk_budget.hpp"
 #include "server_session.hpp"
+#include "identity.hpp"
+#include "trust_store.hpp"
 
 // A "seat" in the receiver. Creating one takes a seat, destroying it gives the seat back.
 // Whoever holds the ConnectionSlot (first the handshake, then the session) keeps the seat taken,
@@ -38,6 +40,10 @@ public:
           ssl_ctx_(ssl_ctx),
           acceptor_(io_ctx, net::ip::tcp::endpoint(net::ip::tcp::v4(), port)),
           save_dir_(std::move(save_dir)) {}
+
+    uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
 
     void start() {
         std::cout << "[SERVER] Listening on port " << acceptor_.local_endpoint().port()
@@ -89,18 +95,29 @@ private:
 
                 // Fingerprint verification
                 X509* cert = SSL_get_peer_certificate(socket->native_handle());
-                if (cert) {
-                    unsigned char md[EVP_MAX_MD_SIZE];
-                    unsigned int n;
-                    if (X509_digest(cert, EVP_sha256(), md, &n)) {
-                        std::cout << "[SERVER] Peer fingerprint: ";
-                        for (unsigned int i = 0; i < n; i++) {
-                            printf("%02X%c", md[i], (i == n - 1) ? '\n' : ':');
-                        }
-                    }
-                    X509_free(cert);
+                if (!cert) {
+                    std::cerr << "[SERVER] Peer did not provide a certificate\n";
+                    boost::system::error_code ignored_ec;
+                    socket->lowest_layer().close(ignored_ec);
+                    return;
                 }
 
+                std::string fp = identity::fingerprint_of(cert);
+                X509_free(cert);
+
+                trust::TrustStore store(identity::TRUST_FILE);
+                auto name = store.find_name(fp);
+                if (!name) {
+                    std::cerr << "[SERVER] Peer " << fp << " (not trusted) tried to connect. Refused.\n";
+                    std::cerr << "To trust this peer: P2P_Secure_File_Sharing trust add "
+                              << fp << " <name>\n";
+                    boost::system::error_code ignored_ec;
+                    socket->lowest_layer().close(ignored_ec);
+                    return;
+                }
+
+                std::cout << "[SERVER] Peer '" << *name << "' connected (fingerprint: "
+                          << fp << ")\n";
                 std::cout << "[SERVER] TLS handshake OK. Channel is secure.\n";
                 // The session now holds the seat, so it is given back only when the session ends
                 std::make_shared<ServerSession>(socket, self->save_dir_, slot, self->disk_budget_)->start();
