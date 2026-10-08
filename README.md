@@ -23,19 +23,20 @@ This is also a security project, so besides how to use it, this README explains 
 
 ## Features
 
-- **Mutual TLS 1.3.** Only TLS 1.3 is accepted. The server refuses clients that do not present a certificate, and the client verifies the server's certificate and host name.
+- **Mutual TLS 1.3.** Only TLS 1.3 is accepted. Every connection is verified against a **trust list of certificate fingerprints**.
+- **Per-peer trust.** No shared keys. You decide exactly which peers to trust by adding their unique fingerprint.
 - **End-to-end integrity.** The sender hashes the file with SHA-256 and sends the hash in the header. The receiver hashes what it actually wrote and only keeps the file if the two match.
 - **Disk protection.** Every upload reserves its space from one shared budget, so parallel uploads cannot fill the disk together, and 100 MiB is always left free.
 - **Safe receiving.** Files are written to a temporary `.part` file and renamed only after verification. Existing files are never overwritten, and a failed transfer leaves nothing behind.
 - **Strict input validation.** Header fields, file sizes and file names are checked against explicit rules before anything touches the disk.
-- **Clear refusals.** If the receiver says no, it says why (name not allowed, file too large, already exists, not enough disk space, ...), and the sender only starts streaming after an explicit "ready".
+- **Clear refusals.** If the receiver says no, it says why (untrusted peer, name not allowed, file too large, already exists, ...).
 - **Timeouts and limits.** A peer gets 10 seconds to finish the TLS handshake, connections that go quiet for 30 seconds are closed, and the receiver accepts at most 64 connections at once.
 - **P2P mode.** One process can receive and send at the same time, with an in-memory address book.
 - **Progress bars** on both sides.
 
 ## Quick start
 
-Tested on Ubuntu 24.04 (including WSL) with GCC 13 and Clang 18. See [Known limitations](#known-limitations) for platforms I have not tested.
+Tested on Ubuntu 24.04 (including WSL) with GCC 13 and Clang 18.
 
 ```bash
 # 1. Dependencies (Debian/Ubuntu)
@@ -45,215 +46,106 @@ sudo apt install build-essential cmake libboost-dev libboost-system-dev libssl-d
 git clone https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing.git
 cd P2P_Secure_File_Sharing
 
-# 3. Create a development certificate (see "Certificates" below)
-bash scripts/gen_certs.sh
-
-# 4. Build
+# 3. Build
 cmake -S . -B build
 cmake --build build
+cd build
 ```
 
-Then try a transfer on one machine, in two terminals, from inside the `build` folder:
+### Identity and Trust
+
+Before you can transfer files, you need an identity and you must exchange fingerprints with your peer.
+
+1. **Generate your identity** (creates `identity.crt` and `identity.key`):
+   ```bash
+   ./P2P_Secure_File_Sharing identity generate "My Name"
+   ```
+
+2. **See your fingerprint**:
+   ```bash
+   ./P2P_Secure_File_Sharing identity fingerprint
+   ```
+
+3. **Trust a peer** (replace `<fp>` with their fingerprint):
+   ```bash
+   ./P2P_Secure_File_Sharing trust add <fp> "Friend Name"
+   ```
+
+### Try a transfer
+
+In two terminals, from inside the `build` folder:
 
 ```bash
-# terminal 1
-cd build
+# terminal 1 (Receiver)
+# First, trust yourself so you can test locally
+./P2P_Secure_File_Sharing trust add $(./P2P_Secure_File_Sharing identity fingerprint) "me"
 ./P2P_Secure_File_Sharing receive 8080
 
-# terminal 2
-cd build
+# terminal 2 (Sender)
 echo "hello" > test.txt
 ./P2P_Secure_File_Sharing send localhost 8080 test.txt
 ```
 
-The sender should end with `Receiver confirmed: file verified and saved!`, and `test.txt` appears in the receiver's `received/` folder.
-
-### Certificates
-
-The program reads `server.crt` and `server.key` from the **directory it is run from**. CMake copies them next to the executable when you configure the project, so generate them *before* running CMake (or re-run CMake afterwards).
-
-`scripts/gen_certs.sh` creates a self-signed development certificate valid for `localhost` and `127.0.0.1`. To use it between two machines, add the address the sender will connect to, because the sender checks the host name against the certificate:
-
-```bash
-bash scripts/gen_certs.sh --force 192.168.1.20 my-laptop.local
-```
-
-Then give **both** machines the same `server.crt` **and** `server.key` (see [Known limitations](#known-limitations) for why, and why that is a big deal). The certificate and key are listed in `.gitignore`: never commit a private key.
-
 ## Usage
 
-```
+```bash
+# Identity management
+P2P_Secure_File_Sharing identity generate <name>
+P2P_Secure_File_Sharing identity fingerprint
+
+# Trust management
+P2P_Secure_File_Sharing trust add <fingerprint> <name>
+P2P_Secure_File_Sharing trust remove <name_or_fingerprint>
+P2P_Secure_File_Sharing trust list
+
+# Transfer
 P2P_Secure_File_Sharing receive <port> [save_folder]
 P2P_Secure_File_Sharing send <host> <port> <file>
 P2P_Secure_File_Sharing p2p <port> [save_folder]
 ```
-
-| Mode | What it does |
-|------|--------------|
-| `receive` | Listens on `<port>` and saves incoming files to `save_folder` (default `received`). Handles several senders at once. |
-| `send` | Sends one file to `<host>:<port>` and exits. |
-| `p2p` | Listens like `receive` *and* gives you a prompt to send files. |
-
-**Commands in `p2p` mode:**
-
-| Command | Meaning |
-|---------|---------|
-| `add <name> <host> <port>` | Remember a peer under a name (kept in memory only, lost on exit) |
-| `send_to <name> <file>` | Send a file to a remembered peer (file path without spaces) |
-| `send <host> <port> "<file>"` | Send to an address directly (quote paths that contain spaces) |
-| `exit` | Quit |
-
-Two nodes on one machine (use different ports and different save folders):
-
-```bash
-# terminal 1
-./P2P_Secure_File_Sharing p2p 8080 received-a
-
-# terminal 2
-./P2P_Secure_File_Sharing p2p 8081 received-b
-> add alice localhost 8080
-> send_to alice test.txt
-```
-
-## How it works
-
-### Architecture
-
-```mermaid
-flowchart TD
-    main["main.cpp: modes and arguments"]
-    p2p["P2PNode: address book and commands"]
-    srv["ServerNode: accepts connections, TLS handshake"]
-    sess["ServerSession: one per incoming sender"]
-    cli["ClientNode: one per outgoing transfer"]
-    val["validation.hpp: header and file name checks"]
-    fstream["file_streaming.hpp: SHA-256 and file size"]
-    proto["protocol.hpp: wire format"]
-    peer["Another peer running the same program"]
-
-    main --> p2p
-    main --> srv
-    main --> cli
-    p2p --> srv
-    p2p --> cli
-    srv --> sess
-    sess --> val
-    sess --> fstream
-    cli --> fstream
-    sess --> proto
-    cli --> proto
-    val --> proto
-    cli -->|"TLS 1.3, mutual"| peer
-    peer -->|"TLS 1.3, mutual"| srv
-```
-
-Everything runs on Boost.Asio's asynchronous I/O. `ServerNode` accepts a connection, completes the TLS handshake, and hands the connection to a new `ServerSession`, then immediately goes back to accepting. Each session is its own small state machine, so several senders can upload at once. `validation.hpp` is deliberately plain functions with no sockets or disk access, which is what makes it easy to unit test and fuzz.
-
-### A transfer, step by step
-
-```mermaid
-sequenceDiagram
-    participant S as Sender (ClientNode)
-    participant R as Receiver (ServerSession)
-
-    S->>R: TCP connect, then TLS 1.3 handshake (both sides present certificates)
-    Note over S: sender checks the receiver's certificate and host name
-    Note over R: receiver requires a client certificate
-
-    S->>R: METADATA header (47 bytes) + file name
-    Note over R: validate header, size limit and file name,<br/>check for an existing file and free disk space
-    alt something is wrong
-        R-->>S: ACK with the reason (and the connection ends)
-    else all good
-        R-->>S: ACK READY
-        S->>R: file bytes in 64 KB pieces
-        Note over R: write to name.part and hash while receiving
-        S->>R: END_OF_FILE header
-        Note over R: compare SHA-256 with the one in the header
-        alt hashes match
-            R-->>S: ACK OK (the .part file is renamed to its real name)
-        else hashes differ
-            R-->>S: ACK HASH_MISMATCH (the .part file is deleted)
-        end
-    end
-```
-
-### Wire format
-
-Every control message is a fixed **47-byte header**; all numbers are big-endian.
-
-| Offset | Size | Field | Meaning |
-|-------:|-----:|-------|---------|
-| 0 | 1 | `msg_type` | `0x01` METADATA, `0x02` CHUNK (reserved, not used on the wire), `0x03` END_OF_FILE, `0x04` ACK |
-| 1 | 4 | `payload_len` | Bytes that follow the header (for METADATA: the file name length) |
-| 5 | 8 | `total_file_size` | File size in bytes |
-| 13 | 2 | `filename_len` | File name length |
-| 15 | 32 | `file_hash` | SHA-256 of the whole file |
-
-- After a METADATA header comes the file name, then (once the receiver says READY) exactly `total_file_size` raw bytes of file data.
-- An ACK is a header with `payload_len = 1` followed by **one status byte**: `0` OK, `1` HASH_MISMATCH, `2` SERVER_ERROR, `3` READY, `4` BAD_REQUEST, `5` FILE_TOO_LARGE, `6` UNSAFE_FILENAME, `7` ALREADY_EXISTS, `8` NO_SPACE.
 
 ## Threat model
 
 ### What is protected
 
 - **Confidentiality and integrity of files in transit**, against anyone watching or tampering with the network.
+- **Authentication**, ensuring you only talk to peers you have explicitly trusted.
 - **The receiver's disk and file system**, against a malicious or buggy sender.
 - **The receiver's availability**, against some (not all) resource-exhaustion tricks.
 
 ### Who the attacker is
 
-1. **A network attacker** who can read, modify, drop or inject traffic between two peers, but does **not** have the certificate and private key.
-2. **A malicious sender** who can reach the receiver's port and speaks the protocol (or garbage) on purpose.
-3. **A malicious receiver**, trying to make a sender send the wrong thing or hang.
+1. **A network attacker** who can read, modify, drop or inject traffic, but does **not** have a trusted private key.
+2. **An untrusted peer** who has their own identity but is not in your `trust.list`.
+3. **A malicious trusted peer**, trying to exploit the protocol (limited by validation and disk budget).
 
 ### Threats and mitigations
 
 | Threat | Mitigation | Checked by |
 |--------|------------|------------|
-| Eavesdropping on a transfer | TLS 1.3 only (a TLS 1.2 client is refused) | End-to-end test, tried by hand |
-| Tampering with data in transit | TLS integrity protection, plus the SHA-256 comparison at the end (a wrong hash gets `HASH_MISMATCH` and no file is kept) | Unit tests (hashing), end-to-end test, tried by hand |
-| Impersonating the receiver (man in the middle) | Sender verifies the receiver's certificate against the trusted `server.crt` **and** checks the host name | Tried by hand: connecting through an address the certificate does not list fails the handshake |
-| A stranger connecting to a receiver | Receiver requires a client certificate and verifies it | Tried by hand: no certificate, or a different self-signed one, is refused |
-| **Path traversal** (`../../x`, `/etc/passwd`, `C:\x`) | File names are accepted only by explicit rules: no path separators, no `:`, no control characters or NUL | Unit tests, fuzzer |
-| Windows tricks (`CON`, `NUL.txt`, `file.txt:hidden` streams, trailing dots and spaces) | Explicit rules, the same on every OS | Unit tests, fuzzer |
-| Overwriting an existing file | Existing names (and in-progress `.part` files) are refused | End-to-end test |
-| Half-written or corrupt files appearing as real files | Write to `.part`, verify the hash, then rename; deleted on any failure | End-to-end test |
-| Claiming a huge file, or many files at once, to fill the disk | 10 GB cap per file, a shared disk budget that every upload must reserve its space from, and 100 MiB always kept free | Unit tests (size cap and disk budget); tried by hand on a real 20 MB disk |
-| Malformed or lying headers | Message type, lengths and sizes are validated; `payload_len` must equal `filename_len` | Unit tests, fuzzer |
-| Memory-safety bugs in the parsing code | Sanitizer builds (ASan, UBSan) run in CI; header and name validation are fuzzed | CI |
-| A peer that connects and goes silent, or that opens a flood of connections | 10-second handshake timeout, 30-second idle timeout on both sides, and at most 64 simultaneous connections on the receiver | End-to-end test (limit and handshake timeout); idle timeout observed by hand |
-
-### Out of scope (by design)
-
-- Protecting a peer from a **malicious file's contents** (this tool moves bytes, it does not scan them).
-- Hiding **that** two peers are talking, or their IP addresses.
-- Protecting the machines themselves (malware, someone with root access, stolen disks).
+| Eavesdropping | TLS 1.3 only | End-to-end test |
+| Tampering | TLS integrity + SHA-256 file hash | Unit tests, E2E test |
+| Impersonating a peer | Unique identities + Fingerprint verification | E2E trust test |
+| A stranger connecting | **Handshake refused** if fingerprint not in trust list | E2E trust test |
+| Path traversal | Strict filename rules (no separators, etc.) | Unit tests, fuzzer |
+| Windows filename tricks | Explicit cross-platform rules | Unit tests, fuzzer |
+| Overwriting files | Existing names and `.part` files refused | E2E test |
+| Filling the disk | cap per file, shared disk budget, 100 MiB reserve | Unit tests |
+| Malformed headers | Strict validation of types and lengths | Unit tests, fuzzer |
+| Memory-safety bugs | ASan/UBSan in CI, fuzzed validation | CI |
+| Idle/Silent connections | 10s handshake & 30s idle timeouts | E2E test |
 
 ## Known limitations
 
-**Authentication is shared, not per peer.** Today the same `server.crt` is both every node's identity and the only certificate every node trusts. In practice all peers must share one certificate **and private key**. That means:
-- Anyone who has the key is indistinguishable from any legitimate peer, and can also impersonate any peer to any other.
-- There is no way to revoke a single peer.
-- The receiver prints the peer's certificate fingerprint, but never compares it to anything, so there is no pinning or trust-on-first-use yet.
+**Trust is manual.** You must out-of-band exchange fingerprints. There is no central authority or automatic discovery.
 
-Treat it as "a group of friends who trust each other with one key", not as strong per-user identity. Per-peer certificates and fingerprint pinning are the top roadmap item.
+**"Shared Identity" Limitation (Legacy):** Previously, all peers shared one `server.crt`. We have moved to individual identities, but if you are still using a shared `identity.crt` among a group, remember that anyone in that group can impersonate anyone else *within* that group. Use unique identities for true security.
 
 **Denial of service is only partly handled.**
-- The 64-connection limit and the 10-second handshake timeout are global, not per address. One machine that keeps reconnecting can still fill every seat and lock other peers out. There is no per-address limit and no rate limiting.
-- The disk budget only accounts for this program's own uploads. Another program writing to the same disk at the same time can still use up space the budget was counting on.
-- An aborted upload can leave its `.part` file in place until the 30-second idle timer fires. In my test runs it was removed after roughly 26 to 32 seconds.
+- The 64-connection limit and the 10-second handshake timeout are global. A persistent attacker can still "squat" on all available slots.
+- The disk budget only tracks this program's activity.
 
-**File names.** The rules block dangerous characters, but file names are not checked for valid UTF-8 or Unicode normalization, and I have not tested non-ASCII names on Windows. Names starting with `.` and names longer than 200 bytes are refused on purpose.
-
-**Smaller things.**
-- The address book lives in memory and is lost when you exit.
-- The server's progress bar uses shared state, so simultaneous uploads garble each other's bar (it is cosmetic).
-- In `p2p` mode the command prompt runs on a second thread that starts transfers. I have not run a ThreadSanitizer pass on that yet.
-- No resume of interrupted transfers, and no folder transfers.
-- The development certificate script uses RSA-2048 and expires after 365 days.
-
-**Platforms.** CI covers Ubuntu with GCC and Clang. I have developed it under WSL; native Windows (MSVC) and macOS builds are untested.
+**File names.** Names are not checked for Unicode normalization. Names starting with `.` or longer than 200 bytes are refused.
 
 ## Testing
 
