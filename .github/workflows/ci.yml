@@ -30,10 +30,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang ninja-build libboost-dev libboost-system-dev libssl-dev
 
-      # The repo deliberately contains no certificates, so make throwaway ones for CI
-      - name: Generate development certificates
-        run: bash scripts/gen_certs.sh
-
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -57,9 +53,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libboost-dev libboost-system-dev libssl-dev
-
-      - name: Generate development certificates
-        run: bash scripts/gen_certs.sh
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DP2P_SANITIZE=ON

@@ -8,9 +8,9 @@
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include "disk_budget.hpp"
-#include "server_session.hpp"
 #include "identity.hpp"
 #include "trust_store.hpp"
+#include "server_session.hpp"
 
 // A "seat" in the receiver. Creating one takes a seat, destroying it gives the seat back.
 // Whoever holds the ConnectionSlot (first the handshake, then the session) keeps the seat taken,
@@ -35,15 +35,15 @@ public:
     // How long a peer gets to finish the TLS handshake before we hang up on it
     static constexpr std::chrono::seconds HANDSHAKE_TIMEOUT{10};
 
-    ServerNode(net::io_context& io_ctx, net::ssl::context& ssl_ctx, uint16_t port, fs::path save_dir)
+    // trust_store is only used to show the peer's name in the log; the handshake itself
+    // (see tls_trust.hpp) already decided whether the peer is allowed in
+    ServerNode(net::io_context& io_ctx, net::ssl::context& ssl_ctx, uint16_t port, fs::path save_dir,
+               std::shared_ptr<trust::TrustStore> trust_store = nullptr)
         : io_ctx_(io_ctx),
           ssl_ctx_(ssl_ctx),
           acceptor_(io_ctx, net::ip::tcp::endpoint(net::ip::tcp::v4(), port)),
-          save_dir_(std::move(save_dir)) {}
-
-    uint16_t port() const {
-        return acceptor_.local_endpoint().port();
-    }
+          save_dir_(std::move(save_dir)),
+          trust_store_(std::move(trust_store)) {}
 
     void start() {
         std::cout << "[SERVER] Listening on port " << acceptor_.local_endpoint().port()
@@ -93,31 +93,21 @@ private:
                     return;
                 }
 
-                // Fingerprint verification
+                // The handshake already proved this peer is on our trust list. Say who it is.
                 X509* cert = SSL_get_peer_certificate(socket->native_handle());
-                if (!cert) {
-                    std::cerr << "[SERVER] Peer did not provide a certificate\n";
-                    boost::system::error_code ignored_ec;
-                    socket->lowest_layer().close(ignored_ec);
-                    return;
+                if (cert) {
+                    try {
+                        const std::string fingerprint = identity::fingerprint_of(cert);
+                        std::string name = "unknown";
+                        if (self->trust_store_) {
+                            if (auto known = self->trust_store_->find_name(fingerprint)) name = *known;
+                        }
+                        std::cout << "[SERVER] Authenticated peer '" << name << "' ("
+                                  << trust::display_fingerprint(fingerprint) << ")\n";
+                    } catch (...) {}
+                    X509_free(cert);
                 }
 
-                std::string fp = identity::fingerprint_of(cert);
-                X509_free(cert);
-
-                trust::TrustStore store(identity::TRUST_FILE);
-                auto name = store.find_name(fp);
-                if (!name) {
-                    std::cerr << "[SERVER] Peer " << fp << " (not trusted) tried to connect. Refused.\n";
-                    std::cerr << "To trust this peer: P2P_Secure_File_Sharing trust add "
-                              << fp << " <name>\n";
-                    boost::system::error_code ignored_ec;
-                    socket->lowest_layer().close(ignored_ec);
-                    return;
-                }
-
-                std::cout << "[SERVER] Peer '" << *name << "' connected (fingerprint: "
-                          << fp << ")\n";
                 std::cout << "[SERVER] TLS handshake OK. Channel is secure.\n";
                 // The session now holds the seat, so it is given back only when the session ends
                 std::make_shared<ServerSession>(socket, self->save_dir_, slot, self->disk_budget_)->start();
@@ -132,5 +122,6 @@ private:
         std::make_shared<std::atomic<std::size_t>>(0);
     // One budget shared by every upload, so parallel uploads cannot fill the disk together
     std::shared_ptr<DiskBudget> disk_budget_ = std::make_shared<DiskBudget>();
+    std::shared_ptr<trust::TrustStore> trust_store_;
 };
 #endif //P2P_SECURE_FILE_SHARING_SERVER_NODE_HPP

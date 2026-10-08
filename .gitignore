@@ -8,14 +8,15 @@ out/
 .idea/
 .vscode/
 
-# Development certificates. NEVER commit a private key. Generate your own:
-#   bash scripts/gen_certs.sh
-server.key
-server.crt
-*.pem
+# Your node's identity and trust list. NEVER commit a private key.
+# Create your own identity with:  P2P_Secure_File_Sharing init
 identity.key
 identity.crt
 trusted_peers.txt
+*.pem
+# (the old shared certificate, no longer used)
+server.key
+server.crt
 
 # Files created by running the program
 received/
