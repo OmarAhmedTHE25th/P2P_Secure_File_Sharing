@@ -14,20 +14,34 @@
 #include "trust_store.hpp"
 #ifdef _WIN32
 #include <conio.h>
+#include <io.h>
+#define ISATTY _isatty
+#define FILENO _fileno
 #else
 #include <termios.h>
 #include <unistd.h>
+#define ISATTY isatty
+#define FILENO fileno
 #endif
 
 namespace cli {
 namespace detail {
 
 inline std::string read_password(const std::string& prompt) {
+    if (!ISATTY(FILENO(stdin))) {
+        // Non-interactive environment (CI, automated test script, piped stdin)
+        std::string pass;
+        if (std::getline(std::cin, pass)) {
+            return pass;
+        }
+        return "";
+    }
+
     std::cout << prompt << std::flush;
     std::string pass;
 #ifdef _WIN32
     char ch;
-    while ((ch = (char)_getch()) != '\r' && ch != '\n') {
+    while ((ch = static_cast<char>(_getch())) != '\r' && ch != '\n') {
         if (ch == '\b') {
             if (!pass.empty()) {
                 pass.pop_back();
@@ -80,12 +94,15 @@ inline int init(const std::vector<std::string>& args, const std::string& program
     }
     if (name.empty()) name = default_name();
 
-    std::string pass1 = read_password("Enter passphrase for private key (press Enter for none): ");
-    if (!pass1.empty()) {
-        std::string pass2 = read_password("Confirm passphrase: ");
-        if (pass1 != pass2) {
-            std::cerr << "[ERROR] Passphrases do not match.\n";
-            return 1;
+    std::string pass1;
+    if (ISATTY(FILENO(stdin))) {
+        pass1 = read_password("Enter passphrase for private key (press Enter for none): ");
+        if (!pass1.empty()) {
+            std::string pass2 = read_password("Confirm passphrase: ");
+            if (pass1 != pass2) {
+                std::cerr << "[ERROR] Passphrases do not match.\n";
+                return 1;
+            }
         }
     }
 

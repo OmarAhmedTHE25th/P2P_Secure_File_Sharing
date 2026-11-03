@@ -29,7 +29,7 @@ struct Entry {
 inline std::optional<std::string> normalize_fingerprint(std::string_view text) {
     std::string out;
     for (char c : text) {
-        const unsigned char uc = static_cast<unsigned char>(c);
+        const auto uc = static_cast<unsigned char>(c);
         if (c == ':' || c == ' ') continue;
         if (!std::isxdigit(uc)) return std::nullopt;
         out.push_back(static_cast<char>(std::tolower(uc)));
@@ -132,7 +132,7 @@ public:
     }
 
     // Each of these returns an error message, or an empty string on success
-    std::string add(std::string_view fingerprint_text, std::string_view name) {
+    std::string add(std::string_view fingerprint_text, std::string_view name) const {
         const auto fingerprint = normalize_fingerprint(fingerprint_text);
         if (!fingerprint) return "that is not a SHA-256 fingerprint (expected 64 hex digits)";
         if (!valid_name(name)) return "invalid name (1 to 64 characters: letters, digits, '.', '_' or '-')";
@@ -148,7 +148,7 @@ public:
     }
 
     // `who` is a peer's name or its fingerprint
-    std::string remove(std::string_view who) {
+    std::string remove(std::string_view who) const {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<Entry> entries = read_unlocked(nullptr);
         const auto fingerprint = normalize_fingerprint(who);

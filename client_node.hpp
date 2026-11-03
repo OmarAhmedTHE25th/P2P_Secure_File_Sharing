@@ -86,38 +86,32 @@ private:
             [self = shared_from_this()](const boost::system::error_code& ec) {
                 if (!ec) {
                     self->reset_timeout();
-
-                    // Fingerprint verification
                     X509* cert = SSL_get_peer_certificate(self->ssl_socket_.native_handle());
-                    if (!cert) {
-                        std::cerr << "[CLIENT] Server did not provide a certificate\n";
-                        boost::system::error_code ignored_ec;
-                        self->ssl_socket_.lowest_layer().close(ignored_ec);
-                        self->finish();
-                        return;
+                    if (cert) {
+                        try {
+                            const std::string fp = identity::fingerprint_of(cert);
+                            trust::TrustStore store(identity::TRUST_FILE);
+                            const auto name = store.find_name(fp);
+                            const std::string shown_fp = trust::display_fingerprint(fp);
+                            if (name) {
+                                std::cout << "[CLIENT] Connected to '" << *name << "' (fingerprint: "
+                                          << shown_fp << ")\n";
+                            } else {
+                                std::cout << "[CLIENT] Connected (fingerprint: " << shown_fp << ")\n";
+                            }
+                        } catch (...) {}
+                        X509_free(cert);
                     }
-
-                    std::string fp = identity::fingerprint_of(cert);
-                    X509_free(cert);
-
-                    trust::TrustStore store(identity::TRUST_FILE);
-                    auto name = store.find_name(fp);
-                    const std::string shown_fp = trust::display_fingerprint(fp);
-                    if (name) {
-                        std::cout << "[CLIENT] Connected to '" << *name << "' (fingerprint: "
-                                  << shown_fp << ")\n";
-                    } else {
-                        std::cout << "[CLIENT] Connected (fingerprint: " << shown_fp << ")\n";
-                    }
-                    cout << "[CLIENT] TLS Handshake SUCCESS!!" << "\n";
+                    std::cout << "[CLIENT] TLS Handshake SUCCESS!!\n";
                     self->prepare_and_send_header();
                 } else {
-                    if (ec != net::error::operation_aborted)
-                        cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
+                    if (ec != net::error::operation_aborted) {
+                        std::cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
+                    }
                     self->finish();
                 }
             }
-            );
+        );
     }
 
     void connect(const tcp::resolver::results_type & endpoints) {
