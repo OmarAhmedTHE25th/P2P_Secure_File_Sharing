@@ -35,11 +35,8 @@ public:
         : resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx), timer_(io_ctx) {};
 
     void send_file(const string& port,const string& host,const string& file_path) {
+        succeeded_ = false;
         file_path_ = file_path;
-        // Certificates are self-signed; peer authentication is performed by the
-        // fingerprint trust store after the TLS handshake.
-        ssl_socket_.set_verify_callback(
-            [](bool, net::ssl::verify_context&) { return true; });
         start_timeout();
         resolver_.async_resolve(host,port,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::resolver::results_type& endpoints) {
@@ -48,9 +45,12 @@ public:
                     self ->connect(endpoints);
                 } else {
                     cerr << "[CLIENT ERROR]: Resolve Failed." << ec.message() << "\n";
+                    self->finish();
                 }
             });
     }
+
+    bool succeeded() const noexcept { return succeeded_; }
 
 private:
 
@@ -93,6 +93,7 @@ private:
                         std::cerr << "[CLIENT] Server did not provide a certificate\n";
                         boost::system::error_code ignored_ec;
                         self->ssl_socket_.lowest_layer().close(ignored_ec);
+                        self->finish();
                         return;
                     }
 
@@ -101,22 +102,19 @@ private:
 
                     trust::TrustStore store(identity::TRUST_FILE);
                     auto name = store.find_name(fp);
-                    if (!name) {
-                        std::cerr << "[CLIENT] Server " << fp << " (not trusted) tried to connect. Refused.\n";
-                        std::cerr << "To trust this peer: P2P_Secure_File_Sharing trust add "
-                                  << fp << " <name>\n";
-                        boost::system::error_code ignored_ec;
-                        self->ssl_socket_.lowest_layer().close(ignored_ec);
-                        return;
+                    const std::string shown_fp = trust::display_fingerprint(fp);
+                    if (name) {
+                        std::cout << "[CLIENT] Connected to '" << *name << "' (fingerprint: "
+                                  << shown_fp << ")\n";
+                    } else {
+                        std::cout << "[CLIENT] Connected (fingerprint: " << shown_fp << ")\n";
                     }
-
-                    std::cout << "[CLIENT] Connected to '" << *name << "' (fingerprint: "
-                              << fp << ")\n";
                     cout << "[CLIENT] TLS Handshake SUCCESS!!" << "\n";
                     self->prepare_and_send_header();
                 } else {
                     if (ec != net::error::operation_aborted)
                         cerr << "[CLIENT ERROR] TLS Handshake failed: " << ec.message() << "\n";
+                    self->finish();
                 }
             }
             );
@@ -132,6 +130,7 @@ private:
                 } else {
                     if (ec != net::error::operation_aborted)
                         cerr << "[CLIENT ERROR] TCP Connect failed: " << ec.message() << "\n";
+                    self->finish();
                 }
 
             }
@@ -183,6 +182,7 @@ void send_end_of_file_signal() {
             cout << "[CLIENT] EOF packet delivered. Waiting for the receiver's verdict...\n";
             self->read_reply([self](AckStatus status) {
     if (status == AckStatus::OK) {
+        self->succeeded_ = true;
         cout << "[CLIENT] Receiver confirmed: " << describe(status) << "!\n";
     } else {
         cerr << "[CLIENT] Transfer failed: " << describe(status) << '\n';
@@ -208,7 +208,7 @@ void send_filename_payload() {
                     self->open_file_and_stream();
                 } else {
                     cerr << "[CLIENT] Receiver refused the transfer: " << describe(status) << '\n';
-
+                    self->finish();
                 }
             });
         });
@@ -222,15 +222,21 @@ void send_filename_payload() {
             [self = shared_from_this(), handler = std::move(handler)](const boost::system::error_code& ec, size_t bytes_read) mutable {
                 if (ec) {
                     if (ec != net::error::operation_aborted) {
+                        const std::string reason = ec.message();
                         cerr << "[CLIENT ERROR] No reply from receiver after reading "
-                             << bytes_read << " bytes: " << ec.message() << '\n';
+                             << bytes_read << " bytes: " << reason << '\n';
+                        if (reason.find("unknown ca") != std::string::npos) {
+                            cerr << "[CLIENT] The receiver may not trust you yet.\n";
+                        }
                     }
+                    self->finish();
                     return;
                 }
                 self->reset_timeout();
                 if (self->ack_header_.msg_type != static_cast<uint8_t>(MessageType::ACK) ||
                     boost::endian::big_to_native(self->ack_header_.payload_len) != 1) {
                     cerr << "[CLIENT ERROR] Malformed reply from receiver\n";
+                    self->finish();
                     return;
                 }
 
@@ -243,6 +249,7 @@ void send_filename_payload() {
                                 cerr << "[CLIENT ERROR] Failed to read reply status after reading "
                                      << bytes_read2 << " bytes: " << ec2.message() << '\n';
                             }
+                            self->finish();
                             return;
                         }
                         self->reset_timeout();
@@ -311,6 +318,7 @@ void send_filename_payload() {
     PacketHeader header_{};
     ifstream file_stream_ ;
     vector<char> buffer_;
+    bool succeeded_ = false;
 
 
 };
