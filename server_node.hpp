@@ -122,7 +122,7 @@ private:
                     return;
                 }
 
-                std::cout << "[SERVER] Peer '" << *name << "' connected (fingerprint: "
+                std::cout << "[SERVER] Authenticated peer '" << *name << "' (fingerprint: "
                           << fp << ")\n";
                 std::cout << "[SERVER] TLS handshake OK. Channel is secure.\n";
                 // The session now holds the seat, so it is given back only when the session ends

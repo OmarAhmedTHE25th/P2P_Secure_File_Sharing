@@ -1,5 +1,6 @@
 #pragma once
 #include <iostream>
+#include <atomic>
 #include <fstream>
 #include <vector>
 #include <memory>
@@ -31,8 +32,11 @@ using tcp = net::ip::tcp;
 class ClientNode : public enable_shared_from_this<ClientNode> {
 public:
     using SSLStream = net::ssl::stream<tcp::socket>;
-    ClientNode(net::io_context& io_ctx,net::ssl::context& ssl_ctx)
-        : resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx), timer_(io_ctx) {};
+    ClientNode(net::io_context& io_ctx,net::ssl::context& ssl_ctx, bool stop_io_on_finish = false)
+        : io_ctx_(io_ctx), resolver_(io_ctx), ssl_socket_(io_ctx,ssl_ctx),
+          timer_(io_ctx), stop_io_on_finish_(stop_io_on_finish) {};
+
+    bool succeeded() const { return succeeded_.load(); }
 
     void send_file(const string& port,const string& host,const string& file_path) {
         file_path_ = file_path;
@@ -55,9 +59,14 @@ public:
 private:
 
     void finish() {
+        if (finished_) return;
+        finished_ = true;
+        resolver_.cancel();
         timer_.cancel();
         boost::system::error_code ignored_ec;
+        ssl_socket_.lowest_layer().cancel(ignored_ec);
         ssl_socket_.lowest_layer().close(ignored_ec);
+        if (stop_io_on_finish_) io_ctx_.stop();
     }
     void start_timeout() {
         timer_.expires_after(std::chrono::seconds(30));
@@ -105,8 +114,7 @@ private:
                         std::cerr << "[CLIENT] Server " << fp << " (not trusted) tried to connect. Refused.\n";
                         std::cerr << "To trust this peer: P2P_Secure_File_Sharing trust add "
                                   << fp << " <name>\n";
-                        boost::system::error_code ignored_ec;
-                        self->ssl_socket_.lowest_layer().close(ignored_ec);
+                        self->finish();
                         return;
                     }
 
@@ -184,6 +192,7 @@ void send_end_of_file_signal() {
             self->read_reply([self](AckStatus status) {
     if (status == AckStatus::OK) {
         cout << "[CLIENT] Receiver confirmed: " << describe(status) << "!\n";
+        self->succeeded_.store(true);
     } else {
         cerr << "[CLIENT] Transfer failed: " << describe(status) << '\n';
     }
@@ -208,7 +217,7 @@ void send_filename_payload() {
                     self->open_file_and_stream();
                 } else {
                     cerr << "[CLIENT] Receiver refused the transfer: " << describe(status) << '\n';
-
+                    self->finish();
                 }
             });
         });
@@ -300,6 +309,7 @@ void send_filename_payload() {
         stream_next_chunk();
     }
 
+    net::io_context& io_ctx_;
     net::steady_timer timer_;
     string file_name_;
     PacketHeader eof_header_{};
@@ -311,6 +321,9 @@ void send_filename_payload() {
     PacketHeader header_{};
     ifstream file_stream_ ;
     vector<char> buffer_;
+    std::atomic<bool> succeeded_{false};
+    bool stop_io_on_finish_;
+    bool finished_ = false;
 
 
 };

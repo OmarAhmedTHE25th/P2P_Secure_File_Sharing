@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
             net::ssl::context client_ctx(net::ssl::context::tlsv13_client);
             tls_trust::configure_client(client_ctx, trust_store);
 
-            auto node = std::make_shared<P2PNode>(io_ctx, server_ctx, client_ctx, port, save_dir, trust_store);
+            auto node = std::make_shared<P2PNode>(io_ctx, server_ctx, client_ctx, port, save_dir);
             node->start();
 
             // Simple command loop for P2P interaction
@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
             net::ssl::context ssl_ctx(net::ssl::context::tlsv13_server);
             tls_trust::configure_server(ssl_ctx, trust_store);
 
-            std::make_shared<ServerNode>(io_ctx, ssl_ctx, port, save_dir, trust_store)->start();
+            std::make_shared<ServerNode>(io_ctx, ssl_ctx, port, save_dir)->start();
             io_ctx.run();
 
         } else if (mode == "send" && argc == 5) {
@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
             tls_trust::configure_client(ssl_ctx, trust_store);
 
             // heads up: send_file takes (port, host, file), in that order
-            auto node = std::make_shared<ClientNode>(io_ctx, ssl_ctx);
+            auto node = std::make_shared<ClientNode>(io_ctx, ssl_ctx, true);
             node->send_file(port, host, file);
             io_ctx.run();
             return node->succeeded() ? 0 : 1;   // so scripts can tell whether the file really arrived
