@@ -8,9 +8,10 @@
 
 class P2PNode {
 public:
-    P2PNode(net::io_context& io_ctx, net::ssl::context& server_ctx, net::ssl::context& client_ctx, uint16_t port, fs::path save_dir)
+    P2PNode(net::io_context& io_ctx, net::ssl::context& server_ctx, net::ssl::context& client_ctx, uint16_t port, fs::path save_dir,
+            std::shared_ptr<trust::TrustStore> trust_store = nullptr)
         : io_ctx_(io_ctx),
-          server_node_(std::make_shared<ServerNode>(io_ctx, server_ctx, port, save_dir)),
+          server_node_(std::make_shared<ServerNode>(io_ctx, server_ctx, port, save_dir, std::move(trust_store))),
           client_ctx_(client_ctx) {}
 
     void start() {

@@ -72,7 +72,8 @@ inline std::string fingerprint_of_file(const std::filesystem::path& cert_path) {
 
 // Creates a new identity: an EC P-256 key and a certificate for it, valid for ten years.
 inline void generate(const std::filesystem::path& cert_path, const std::filesystem::path& key_path,
-                     const std::string& common_name, bool overwrite = false) {
+                     const std::string& common_name, const std::string& passphrase = "",
+                     bool overwrite = false) {
     namespace fs = std::filesystem;
     if (!overwrite && (fs::exists(cert_path) || fs::exists(key_path))) {
         throw std::runtime_error("identity files already exist (use --force to replace them, "
@@ -111,7 +112,15 @@ inline void generate(const std::filesystem::path& cert_path, const std::filesyst
     {
         detail::FilePtr key_file(detail::open_private_file(key_path), &std::fclose);
         if (!key_file) throw std::runtime_error("cannot write " + key_path.string());
-        if (PEM_write_PrivateKey(key_file.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+
+        const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
+        const unsigned char* pass_data = passphrase.empty()
+            ? nullptr
+            : reinterpret_cast<const unsigned char*>(passphrase.data());
+        int pass_len = static_cast<int>(passphrase.size());
+
+        if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
+                                 pass_data, pass_len, nullptr, nullptr) != 1) {
             throw std::runtime_error("could not write the private key");
         }
     }
@@ -123,5 +132,4 @@ inline void generate(const std::filesystem::path& cert_path, const std::filesyst
         }
     }
 }
-
 } // namespace identity
