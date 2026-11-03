@@ -39,7 +39,13 @@ public:
         : io_ctx_(io_ctx),
           ssl_ctx_(ssl_ctx),
           acceptor_(io_ctx, net::ip::tcp::endpoint(net::ip::tcp::v4(), port)),
-          save_dir_(std::move(save_dir)) {}
+          save_dir_(std::move(save_dir)),
+          trust_file_(fs::current_path() / identity::TRUST_FILE) {
+        // Certificates are self-signed; peer authentication is performed by the
+        // fingerprint trust store after the TLS handshake.
+        ssl_ctx_.set_verify_callback(
+            [](bool, net::ssl::verify_context&) { return true; });
+    }
 
     uint16_t port() const {
         return acceptor_.local_endpoint().port();
@@ -105,7 +111,7 @@ private:
                 std::string fp = identity::fingerprint_of(cert);
                 X509_free(cert);
 
-                trust::TrustStore store(identity::TRUST_FILE);
+                trust::TrustStore store(self->trust_file_);
                 auto name = store.find_name(fp);
                 if (!name) {
                     std::cerr << "[SERVER] Peer " << fp << " (not trusted) tried to connect. Refused.\n";
@@ -128,6 +134,7 @@ private:
     net::ssl::context& ssl_ctx_;
     net::ip::tcp::acceptor acceptor_;
     fs::path save_dir_;
+    fs::path trust_file_;
     std::shared_ptr<std::atomic<std::size_t>> active_connections_ =
         std::make_shared<std::atomic<std::size_t>>(0);
     // One budget shared by every upload, so parallel uploads cannot fill the disk together

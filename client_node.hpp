@@ -36,7 +36,10 @@ public:
 
     void send_file(const string& port,const string& host,const string& file_path) {
         file_path_ = file_path;
-        ssl_socket_.set_verify_callback(net::ssl::host_name_verification(host));
+        // Certificates are self-signed; peer authentication is performed by the
+        // fingerprint trust store after the TLS handshake.
+        ssl_socket_.set_verify_callback(
+            [](bool, net::ssl::verify_context&) { return true; });
         start_timeout();
         resolver_.async_resolve(host,port,
             [self = shared_from_this()](const boost::system::error_code& ec,const tcp::resolver::results_type& endpoints) {
