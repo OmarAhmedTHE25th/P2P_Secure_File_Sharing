@@ -14,6 +14,8 @@
 #include <boost/asio/ssl.hpp>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
+
+#include "cli_identity.hpp"
 #include "identity.hpp"
 #include "trust_store.hpp"
 
@@ -76,7 +78,11 @@ make_verifier(std::shared_ptr<trust::TrustStore> store, std::string log_prefix, 
     };
 }
 
-inline void load_identity(boost::asio::ssl::context& context) {
+    inline void load_identity(boost::asio::ssl::context& context) {
+    context.set_password_callback([](std::size_t max_length, boost::asio::ssl::context_base::password_purpose purpose) -> std::string {
+        return read_password("Enter passphrase to unlock identity.key: ");
+    });
+
     context.use_certificate_chain_file(identity::CERT_FILE);
     context.use_private_key_file(identity::KEY_FILE, boost::asio::ssl::context::pem);
 }

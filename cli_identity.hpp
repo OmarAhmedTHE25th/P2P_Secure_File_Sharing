@@ -10,33 +10,64 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <boost/asio/ip/host_name.hpp>
 #include "identity.hpp"
 #include "trust_store.hpp"
+#ifdef _WIN32
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 namespace cli {
-
-inline void print_identity_usage(const std::string& program) {
-    std::cerr << "Identity and trust:\n"
-              << "  " << program << " init [--force] [name]\n"
-              << "  " << program << " fingerprint\n"
-              << "  " << program << " trust add <fingerprint> <name>\n"
-              << "  " << program << " trust list\n"
-              << "  " << program << " trust remove <name|fingerprint>\n";
-}
-
 namespace detail {
 
-inline std::string default_name() {
-    try {
-        std::string name = boost::asio::ip::host_name();
-        std::string cleaned;
-        for (char c : name) {
-            if (trust::valid_name(std::string(1, c))) cleaned.push_back(c);
+inline std::string read_password(const std::string& prompt) {
+    std::cout << prompt << std::flush;
+    std::string pass;
+#ifdef _WIN32
+    char ch;
+    while ((ch = (char)_getch()) != '\r' && ch != '\n') {
+        if (ch == '\b') {
+            if (!pass.empty()) {
+                pass.pop_back();
+                std::cout << "\b \b" << std::flush;
+            }
+        } else {
+            pass.push_back(ch);
         }
-        if (!cleaned.empty()) return cleaned.substr(0, 64);
-    } catch (...) {}
-    return "p2p-node";
+    }
+    std::cout << '\n';
+#else
+    termios old_t{}, new_t{};
+    tcgetattr(STDIN_FILENO, &old_t);
+    new_t = old_t;
+    new_t.c_lflag &= ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_t);
+
+    std::getline(std::cin, pass);
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_t);
+    std::cout << '\n';
+#endif
+    return pass;
+}
+
+inline std::string default_name() {
+#ifdef _WIN32
+    const char* user = std::getenv("USERNAME");
+#else
+    const char* user = std::getenv("USER");
+#endif
+    return user ? std::string(user) : "a-node";
+}
+
+inline void print_identity_usage(const std::string& program) {
+    std::cerr << "Identity management:\n"
+              << "  " << program << " init [--force] [name]          create identity.key and identity.crt\n"
+              << "  " << program << " fingerprint                    show your fingerprint\n"
+              << "  " << program << " trust add <fingerprint> <name> trust a peer\n"
+              << "  " << program << " trust list                     show who you trust\n"
+              << "  " << program << " trust remove <name|fingerprint>\n";
 }
 
 inline int init(const std::vector<std::string>& args, const std::string& program) {
@@ -48,8 +79,18 @@ inline int init(const std::vector<std::string>& args, const std::string& program
         else { print_identity_usage(program); return 1; }
     }
     if (name.empty()) name = default_name();
+
+    std::string pass1 = read_password("Enter passphrase for private key (press Enter for none): ");
+    if (!pass1.empty()) {
+        std::string pass2 = read_password("Confirm passphrase: ");
+        if (pass1 != pass2) {
+            std::cerr << "[ERROR] Passphrases do not match.\n";
+            return 1;
+        }
+    }
+
     try {
-        identity::generate(identity::CERT_FILE, identity::KEY_FILE, name, force);
+        identity::generate(identity::CERT_FILE, identity::KEY_FILE, name, pass1, force);
         const std::string fingerprint = identity::fingerprint_of_file(identity::CERT_FILE);
         std::cout << "Created " << identity::KEY_FILE << " (keep it secret!) and "
                   << identity::CERT_FILE << " for '" << name << "'.\n"
@@ -64,56 +105,63 @@ inline int init(const std::vector<std::string>& args, const std::string& program
     }
 }
 
-inline int fingerprint(const std::string& program) {
+inline int fingerprint() {
     try {
-        std::cout << "Your fingerprint: "
-                  << trust::display_fingerprint(identity::fingerprint_of_file(identity::CERT_FILE)) << '\n';
+        const std::string fp = identity::fingerprint_of_file(identity::CERT_FILE);
+        std::cout << "Your fingerprint: " << trust::display_fingerprint(fp) << "\n";
         return 0;
-    } catch (const std::exception&) {
-        std::cerr << "[ERROR] No identity found here. Create one with: " << program << " init\n";
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] " << e.what() << "\n(Did you run 'init' yet?)\n";
         return 1;
     }
 }
 
-inline int trust_command(const std::vector<std::string>& args, const std::string& program) {
+inline int trust(const std::vector<std::string>& args, const std::string& program) {
+    if (args.size() < 2) { print_identity_usage(program); return 1; }
+    const std::string& cmd = args[1];
     trust::TrustStore store(identity::TRUST_FILE);
-    if (args.size() == 4 && args[1] == "add") {
-        const std::string error = store.add(args[2], args[3]);
-        if (!error.empty()) { std::cerr << "[ERROR] " << error << '\n'; return 1; }
-        std::cout << "Now trusting '" << args[3] << "' ("
-                  << trust::display_fingerprint(*trust::normalize_fingerprint(args[2])) << ").\n";
+
+    if (cmd == "add" && args.size() == 4) {
+        const std::string err = store.add(args[2], args[3]);
+        if (!err.empty()) { std::cerr << "[ERROR] " << err << "\n"; return 1; }
+        std::cout << "Peer '" << args[3] << "' is now trusted.\n";
         return 0;
-    }
-    if (args.size() == 2 && args[1] == "list") {
+    } else if (cmd == "list" && args.size() == 2) {
         std::vector<std::string> warnings;
         const auto entries = store.list(&warnings);
-        for (const std::string& w : warnings) {
-            std::cerr << "[WARNING] " << identity::TRUST_FILE << ", " << w << '\n';
-        }
-        if (entries.empty()) { std::cout << "Nobody is trusted yet.\n"; return 0; }
-        for (const auto& e : entries) {
-            std::cout << e.name << "  " << trust::display_fingerprint(e.fingerprint) << '\n';
+        for (const auto& w : warnings) std::cerr << "[WARNING] " << w << "\n";
+        if (entries.empty()) {
+            std::cout << "Your trust list is empty.\n";
+        } else {
+            std::cout << "Trusted peers:\n";
+            for (const auto& e : entries) {
+                std::cout << "  " << trust::display_fingerprint(e.fingerprint) << "  " << e.name << "\n";
+            }
         }
         return 0;
-    }
-    if (args.size() == 3 && args[1] == "remove") {
-        const std::string error = store.remove(args[2]);
-        if (!error.empty()) { std::cerr << "[ERROR] " << error << '\n'; return 1; }
-        std::cout << "No longer trusting '" << args[2] << "'.\n";
+    } else if (cmd == "remove" && args.size() == 3) {
+        const std::string err = store.remove(args[2]);
+        if (!err.empty()) { std::cerr << "[ERROR] " << err << "\n"; return 1; }
+        std::cout << "Removed '" << args[2] << "' from trust list.\n";
         return 0;
+    } else {
+        print_identity_usage(program);
+        return 1;
     }
-    print_identity_usage(program);
-    return 1;
 }
 
 } // namespace detail
 
-// Returns the exit code if `args` is an identity command, or -1 if it is something else
+inline void print_identity_usage(const std::string& program) {
+    detail::print_identity_usage(program);
+}
+
 inline int handle_identity_command(const std::vector<std::string>& args, const std::string& program) {
     if (args.empty()) return -1;
-    if (args[0] == "init") return detail::init(args, program);
-    if (args[0] == "fingerprint") return detail::fingerprint(program);
-    if (args[0] == "trust") return detail::trust_command(args, program);
+    const std::string& cmd = args[0];
+    if (cmd == "init") return detail::init(args, program);
+    if (cmd == "fingerprint") return detail::fingerprint();
+    if (cmd == "trust") return detail::trust(args, program);
     return -1;
 }
 
