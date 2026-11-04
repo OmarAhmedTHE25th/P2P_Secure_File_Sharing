@@ -70,6 +70,7 @@ if(P2P_BUILD_GUI)
             client_node.hpp
             server_session.hpp
             server_node.hpp
+            gui/network_bridge.hpp
     )
 
     target_include_directories(P2P_Secure_File_Sharing_GUI PRIVATE

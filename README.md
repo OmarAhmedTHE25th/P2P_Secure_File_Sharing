@@ -343,7 +343,6 @@ scripts/e2e_test.sh   End-to-end transfer test
 
 ## Roadmap
 
-- Protect the private key with a passphrase
 - Optional trust-on-first-use for senders (like SSH `known_hosts`), with an explicit prompt
 - Identity and trust list in a per-user config folder; trust commands inside the `p2p` prompt
 - Per-address connection limits and rate limiting
