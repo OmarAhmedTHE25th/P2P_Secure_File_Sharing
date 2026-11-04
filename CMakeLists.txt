@@ -71,6 +71,11 @@ if(P2P_BUILD_GUI)
             server_session.hpp
             server_node.hpp
             gui/network_bridge.hpp
+            gui/main_window.cpp
+            gui/main_window.hpp
+            gui/main_gui.cpp
+            gui/main_gui.cpp
+            gui/network_bridge.cpp
     )
 
     target_include_directories(P2P_Secure_File_Sharing_GUI PRIVATE
