@@ -45,7 +45,9 @@ void MainWindow::setupUi() {
 
     auto* targetLayout = new QHBoxLayout();
     host_input_ = new QLineEdit("127.0.0.1", this);
+    host_input_->setFixedHeight(36);
     port_input_ = new QLineEdit("8080", this);
+    port_input_->setFixedHeight(36);
     targetLayout->addWidget(new QLabel("Host:"));
     targetLayout->addWidget(host_input_);
     targetLayout->addWidget(new QLabel("Port:"));
@@ -54,6 +56,7 @@ void MainWindow::setupUi() {
 
     auto* fileLayout = new QHBoxLayout();
     file_path_input_ = new QLineEdit(this);
+    file_path_input_->setFixedHeight(36);
     auto* browseBtn = new QPushButton("Browse...", this);
     connect(browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseFile);
     fileLayout->addWidget(new QLabel("File:"));
@@ -62,6 +65,7 @@ void MainWindow::setupUi() {
     sendLayout->addLayout(fileLayout);
 
     send_btn_ = new QPushButton("Send File", this);
+    send_btn_->setFixedHeight(38);
     connect(send_btn_, &QPushButton::clicked, this, &MainWindow::onSendFile);
     sendLayout->addWidget(send_btn_);
 
@@ -76,8 +80,11 @@ void MainWindow::setupUi() {
 
     auto* srvConfigLayout = new QHBoxLayout();
     server_port_input_ = new QLineEdit("8080", this);
+    server_port_input_->setFixedHeight(36);
     save_dir_input_ = new QLineEdit("received", this);
+    save_dir_input_->setFixedHeight(36);
     server_toggle_btn_ = new QPushButton("Start Listening", this);
+    server_toggle_btn_->setFixedHeight(38);
     connect(server_toggle_btn_, &QPushButton::clicked, this, &MainWindow::onStartServer);
 
     srvConfigLayout->addWidget(new QLabel("Listen Port:"));
@@ -114,6 +121,8 @@ void MainWindow::setupUi() {
     tabs->addTab(trustTab, "Trusted Peers");
 
     mainLayout->addWidget(tabs);
+    mainLayout->setContentsMargins(24, 24, 24, 24);
+    mainLayout->setSpacing(16);
 
     // Activity Log
     log_pane_ = new QTextEdit(this);
