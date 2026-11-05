@@ -1,10 +1,14 @@
 #include "main_window.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QTabWidget>
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QMessageBox>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QTimer>
 #include "identity.hpp"
 #include "trust_store.hpp"
 
@@ -14,124 +18,351 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(bridge_, &NetworkBridge::logMessage, this, &MainWindow::onLogMessage);
     connect(bridge_, &NetworkBridge::transferProgress, this, &MainWindow::onTransferProgress);
+    connect(bridge_, &NetworkBridge::transferCompleted, this, &MainWindow::onTransferCompleted);
 
     refreshPeerList();
 }
 
 void MainWindow::setupUi() {
-    setWindowTitle("P2P Secure File Transfer");
-    resize(720, 540);
+    setWindowTitle("P2P Secure File Sharing");
+    resize(820, 680);
+    setMinimumSize(740, 600);
 
     auto* centralWidget = new QWidget(this);
     auto* mainLayout = new QVBoxLayout(centralWidget);
-
-    // Identity Bar
-    auto* idLayout = new QHBoxLayout();
-    QString my_fp = "No Identity Found";
-    try {
-        my_fp = QString::fromStdString(trust::display_fingerprint(identity::fingerprint_of_file(identity::CERT_FILE)));
-    } catch (...) {}
-    fp_label_ = new QLabel(QString("<b>My Fingerprint:</b> %1").arg(my_fp), this);
-    fp_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    idLayout->addWidget(fp_label_);
-    mainLayout->addLayout(idLayout);
-
-    // Tabs
-    auto* tabs = new QTabWidget(this);
-
-    // Tab 1: Send File
-    auto* sendTab = new QWidget();
-    auto* sendLayout = new QVBoxLayout(sendTab);
-
-    auto* targetLayout = new QHBoxLayout();
-    host_input_ = new QLineEdit("127.0.0.1", this);
-    host_input_->setFixedHeight(36);
-    port_input_ = new QLineEdit("8080", this);
-    port_input_->setFixedHeight(36);
-    targetLayout->addWidget(new QLabel("Host:"));
-    targetLayout->addWidget(host_input_);
-    targetLayout->addWidget(new QLabel("Port:"));
-    targetLayout->addWidget(port_input_);
-    sendLayout->addLayout(targetLayout);
-
-    auto* fileLayout = new QHBoxLayout();
-    file_path_input_ = new QLineEdit(this);
-    file_path_input_->setFixedHeight(36);
-    auto* browseBtn = new QPushButton("Browse...", this);
-    connect(browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseFile);
-    fileLayout->addWidget(new QLabel("File:"));
-    fileLayout->addWidget(file_path_input_);
-    fileLayout->addWidget(browseBtn);
-    sendLayout->addLayout(fileLayout);
-
-    send_btn_ = new QPushButton("Send File", this);
-    send_btn_->setFixedHeight(38);
-    connect(send_btn_, &QPushButton::clicked, this, &MainWindow::onSendFile);
-    sendLayout->addWidget(send_btn_);
-
-    progress_bar_ = new QProgressBar(this);
-    progress_bar_->setValue(0);
-    sendLayout->addWidget(progress_bar_);
-    tabs->addTab(sendTab, "Send");
-
-    // Tab 2: Receiver
-    auto* recvTab = new QWidget();
-    auto* recvLayout = new QVBoxLayout(recvTab);
-
-    auto* srvConfigLayout = new QHBoxLayout();
-    server_port_input_ = new QLineEdit("8080", this);
-    server_port_input_->setFixedHeight(36);
-    save_dir_input_ = new QLineEdit("received", this);
-    save_dir_input_->setFixedHeight(36);
-    server_toggle_btn_ = new QPushButton("Start Listening", this);
-    server_toggle_btn_->setFixedHeight(38);
-    connect(server_toggle_btn_, &QPushButton::clicked, this, &MainWindow::onStartServer);
-
-    srvConfigLayout->addWidget(new QLabel("Listen Port:"));
-    srvConfigLayout->addWidget(server_port_input_);
-    srvConfigLayout->addWidget(new QLabel("Save Folder:"));
-    srvConfigLayout->addWidget(save_dir_input_);
-    srvConfigLayout->addWidget(server_toggle_btn_);
-    recvLayout->addLayout(srvConfigLayout);
-    tabs->addTab(recvTab, "Receive");
-
-    // Tab 3: Trust List
-    auto* trustTab = new QWidget();
-    auto* trustLayout = new QVBoxLayout(trustTab);
-    peer_table_ = new QTableWidget(0, 2, this);
-    peer_table_->setHorizontalHeaderLabels({"Peer Name", "Fingerprint"});
-    peer_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    trustLayout->addWidget(peer_table_);
-
-    auto* addPeerLayout = new QHBoxLayout();
-    peer_name_input_ = new QLineEdit(this);
-    peer_name_input_->setPlaceholderText("Peer Name");
-    peer_fp_input_ = new QLineEdit(this);
-    peer_fp_input_->setPlaceholderText("64-hex Fingerprint");
-    auto* addPeerBtn = new QPushButton("Add Peer", this);
-    auto* removePeerBtn = new QPushButton("Remove Selected", this);
-    connect(addPeerBtn, &QPushButton::clicked, this, &MainWindow::onAddPeer);
-    connect(removePeerBtn, &QPushButton::clicked, this, &MainWindow::onRemovePeer);
-
-    addPeerLayout->addWidget(peer_name_input_);
-    addPeerLayout->addWidget(peer_fp_input_);
-    addPeerLayout->addWidget(addPeerBtn);
-    addPeerLayout->addWidget(removePeerBtn);
-    trustLayout->addLayout(addPeerLayout);
-    tabs->addTab(trustTab, "Trusted Peers");
-
-    mainLayout->addWidget(tabs);
     mainLayout->setContentsMargins(24, 24, 24, 24);
     mainLayout->setSpacing(16);
 
-    // Activity Log
+    // Identity Card Container
+    auto* idCard = new QFrame(this);
+    idCard->setObjectName("card");
+    auto* idLayout = new QVBoxLayout(idCard);
+    idLayout->setContentsMargins(18, 16, 18, 16);
+    idLayout->setSpacing(8);
+
+    auto* idHeaderLayout = new QHBoxLayout();
+    auto* appTitle = new QLabel("P2P Secure File Sharing", this);
+    appTitle->setObjectName("appTitle");
+    auto* badge = new QLabel("TLS 1.3 Node", this);
+    badge->setObjectName("badge");
+    idHeaderLayout->addWidget(appTitle);
+    idHeaderLayout->addStretch();
+    idHeaderLayout->addWidget(badge);
+    idLayout->addLayout(idHeaderLayout);
+
+    QString my_fp = "No Identity Found";
+    try {
+        raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(identity::CERT_FILE));
+        my_fp = QString::fromStdString(trust::display_fingerprint(raw_fingerprint_.toStdString()));
+    } catch (...) {}
+
+    auto* fpRowLayout = new QHBoxLayout();
+    auto* fpTitle = new QLabel("My Fingerprint:", this);
+    fpTitle->setObjectName("subheading");
+    
+    fp_label_ = new QLabel(my_fp, this);
+    fp_label_->setObjectName("monoBox");
+    fp_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    copy_fp_btn_ = new QPushButton("Copy", this);
+    copy_fp_btn_->setObjectName("secondaryBtn");
+    copy_fp_btn_->setToolTip("Copy raw SHA-256 fingerprint to clipboard");
+    copy_fp_btn_->setFixedWidth(70);
+    connect(copy_fp_btn_, &QPushButton::clicked, this, &MainWindow::onCopyFingerprint);
+
+    fpRowLayout->addWidget(fpTitle);
+    fpRowLayout->addWidget(fp_label_, 1);
+    fpRowLayout->addWidget(copy_fp_btn_);
+    idLayout->addLayout(fpRowLayout);
+
+    mainLayout->addWidget(idCard);
+
+    // Tab Navigation
+    auto* tabs = new QTabWidget(this);
+    tabs->addTab(createSendTab(), "Send File");
+    tabs->addTab(createReceiveTab(), "Receive Files");
+    tabs->addTab(createTrustTab(), "Trusted Peers");
+    mainLayout->addWidget(tabs);
+
+    // Activity Log Card Container
+    auto* logCard = new QFrame(this);
+    logCard->setObjectName("card");
+    auto* logLayout = new QVBoxLayout(logCard);
+    logLayout->setContentsMargins(18, 14, 18, 16);
+    logLayout->setSpacing(8);
+
+    auto* logHeaderLayout = new QHBoxLayout();
+    auto* logTitle = new QLabel("Activity & Network Log", this);
+    logTitle->setObjectName("cardTitle");
+    auto* clearLogBtn = new QPushButton("Clear Log", this);
+    clearLogBtn->setObjectName("secondaryBtn");
+    clearLogBtn->setFixedHeight(28);
+    connect(clearLogBtn, &QPushButton::clicked, this, &MainWindow::onClearLog);
+    logHeaderLayout->addWidget(logTitle);
+    logHeaderLayout->addStretch();
+    logHeaderLayout->addWidget(clearLogBtn);
+    logLayout->addLayout(logHeaderLayout);
+
     log_pane_ = new QTextEdit(this);
     log_pane_->setReadOnly(true);
-    log_pane_->setMaximumHeight(150);
-    mainLayout->addWidget(new QLabel("Activity Log:"));
-    mainLayout->addWidget(log_pane_);
+    log_pane_->setFixedHeight(120);
+    logLayout->addWidget(log_pane_);
+
+    mainLayout->addWidget(logCard);
 
     setCentralWidget(centralWidget);
+}
+
+QWidget* MainWindow::createSendTab() {
+    auto* sendTab = new QWidget();
+    auto* layout = new QVBoxLayout(sendTab);
+    layout->setContentsMargins(0, 10, 0, 0);
+    layout->setSpacing(12);
+
+    // Target Node Card
+    auto* targetCard = new QFrame(sendTab);
+    targetCard->setObjectName("card");
+    auto* targetLayout = new QVBoxLayout(targetCard);
+    targetLayout->setContentsMargins(18, 16, 18, 16);
+    targetLayout->setSpacing(10);
+
+    auto* targetTitle = new QLabel("Target Peer Information", targetCard);
+    targetTitle->setObjectName("cardTitle");
+    targetLayout->addWidget(targetTitle);
+
+    auto* targetFormLayout = new QGridLayout();
+    targetFormLayout->setHorizontalSpacing(16);
+    targetFormLayout->setVerticalSpacing(8);
+
+    auto* hostLabel = new QLabel("Host Address:", targetCard);
+    hostLabel->setObjectName("inputLabel");
+    host_input_ = new QLineEdit("127.0.0.1", targetCard);
+    host_input_->setPlaceholderText("IP address or hostname (e.g. 192.168.1.10)");
+    host_input_->setFixedHeight(36);
+
+    auto* portLabel = new QLabel("Port:", targetCard);
+    portLabel->setObjectName("inputLabel");
+    port_input_ = new QLineEdit("8080", targetCard);
+    port_input_->setPlaceholderText("8080");
+    port_input_->setFixedWidth(120);
+    port_input_->setFixedHeight(36);
+
+    targetFormLayout->addWidget(hostLabel, 0, 0);
+    targetFormLayout->addWidget(portLabel, 0, 1);
+    targetFormLayout->addWidget(host_input_, 1, 0);
+    targetFormLayout->addWidget(port_input_, 1, 1);
+    targetLayout->addLayout(targetFormLayout);
+
+    layout->addWidget(targetCard);
+
+    // File Selection Card
+    auto* fileCard = new QFrame(sendTab);
+    fileCard->setObjectName("card");
+    auto* fileLayout = new QVBoxLayout(fileCard);
+    fileLayout->setContentsMargins(18, 16, 18, 16);
+    fileLayout->setSpacing(10);
+
+    auto* fileTitle = new QLabel("Payload Selection", fileCard);
+    fileTitle->setObjectName("cardTitle");
+    fileLayout->addWidget(fileTitle);
+
+    auto* fileInputLayout = new QHBoxLayout();
+    file_path_input_ = new QLineEdit(fileCard);
+    file_path_input_->setPlaceholderText("Select a file to transfer securely...");
+    file_path_input_->setFixedHeight(36);
+
+    auto* browseBtn = new QPushButton("Browse...", fileCard);
+    browseBtn->setObjectName("secondaryBtn");
+    browseBtn->setFixedHeight(36);
+    connect(browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseFile);
+
+    fileInputLayout->addWidget(file_path_input_, 1);
+    fileInputLayout->addWidget(browseBtn);
+    fileLayout->addLayout(fileInputLayout);
+
+    layout->addWidget(fileCard);
+
+    // Transfer Action Card
+    auto* actionCard = new QFrame(sendTab);
+    actionCard->setObjectName("card");
+    auto* actionLayout = new QVBoxLayout(actionCard);
+    actionLayout->setContentsMargins(18, 16, 18, 16);
+    actionLayout->setSpacing(10);
+
+    send_btn_ = new QPushButton("Send File", actionCard);
+    send_btn_->setObjectName("primaryBtn");
+    send_btn_->setFixedHeight(40);
+    connect(send_btn_, &QPushButton::clicked, this, &MainWindow::onSendFile);
+    actionLayout->addWidget(send_btn_);
+
+    progress_bar_ = new QProgressBar(actionCard);
+    progress_bar_->setValue(0);
+    progress_bar_->setFixedHeight(20);
+    actionLayout->addWidget(progress_bar_);
+
+    transfer_status_lbl_ = new QLabel("Ready to initiate transfer", actionCard);
+    transfer_status_lbl_->setObjectName("subheading");
+    transfer_status_lbl_->setAlignment(Qt::AlignCenter);
+    actionLayout->addWidget(transfer_status_lbl_);
+
+    layout->addWidget(actionCard);
+    layout->addStretch();
+
+    return sendTab;
+}
+
+QWidget* MainWindow::createReceiveTab() {
+    auto* recvTab = new QWidget();
+    auto* layout = new QVBoxLayout(recvTab);
+    layout->setContentsMargins(0, 10, 0, 0);
+    layout->setSpacing(12);
+
+    // Listener Configuration Card
+    auto* srvCard = new QFrame(recvTab);
+    srvCard->setObjectName("card");
+    auto* srvLayout = new QVBoxLayout(srvCard);
+    srvLayout->setContentsMargins(18, 16, 18, 16);
+    srvLayout->setSpacing(12);
+
+    auto* srvTitle = new QLabel("Incoming Transfers Listener", srvCard);
+    srvTitle->setObjectName("cardTitle");
+    srvLayout->addWidget(srvTitle);
+
+    auto* srvFormLayout = new QGridLayout();
+    srvFormLayout->setHorizontalSpacing(16);
+    srvFormLayout->setVerticalSpacing(8);
+
+    auto* portLabel = new QLabel("Listening Port:", srvCard);
+    portLabel->setObjectName("inputLabel");
+    server_port_input_ = new QLineEdit("8080", srvCard);
+    server_port_input_->setPlaceholderText("8080");
+    server_port_input_->setFixedHeight(36);
+
+    auto* dirLabel = new QLabel("Save Directory:", srvCard);
+    dirLabel->setObjectName("inputLabel");
+
+    auto* dirInputLayout = new QHBoxLayout();
+    save_dir_input_ = new QLineEdit("received", srvCard);
+    save_dir_input_->setFixedHeight(36);
+    auto* browseDirBtn = new QPushButton("Browse...", srvCard);
+    browseDirBtn->setObjectName("secondaryBtn");
+    browseDirBtn->setFixedHeight(36);
+    connect(browseDirBtn, &QPushButton::clicked, this, &MainWindow::onBrowseSaveDir);
+    dirInputLayout->addWidget(save_dir_input_, 1);
+    dirInputLayout->addWidget(browseDirBtn);
+
+    srvFormLayout->addWidget(portLabel, 0, 0);
+    srvFormLayout->addWidget(dirLabel, 0, 1);
+    srvFormLayout->addWidget(server_port_input_, 1, 0);
+    srvFormLayout->addLayout(dirInputLayout, 1, 1);
+    srvLayout->addLayout(srvFormLayout);
+
+    server_toggle_btn_ = new QPushButton("Start Listening", srvCard);
+    server_toggle_btn_->setObjectName("primaryBtn");
+    server_toggle_btn_->setFixedHeight(40);
+    connect(server_toggle_btn_, &QPushButton::clicked, this, &MainWindow::onStartServer);
+    srvLayout->addWidget(server_toggle_btn_);
+
+    server_status_lbl_ = new QLabel("Listener inactive - start listening to receive files from trusted peers", srvCard);
+    server_status_lbl_->setObjectName("subheading");
+    server_status_lbl_->setAlignment(Qt::AlignCenter);
+    srvLayout->addWidget(server_status_lbl_);
+
+    layout->addWidget(srvCard);
+
+    // Trust Notice Card
+    auto* noticeCard = new QFrame(recvTab);
+    noticeCard->setObjectName("card");
+    auto* noticeLayout = new QVBoxLayout(noticeCard);
+    noticeLayout->setContentsMargins(18, 14, 18, 14);
+    noticeLayout->setSpacing(6);
+
+    auto* noticeTitle = new QLabel("Security Notice", noticeCard);
+    noticeTitle->setObjectName("cardTitle");
+    auto* noticeText = new QLabel("Incoming connections are authenticated against your Trusted Peers store using mutual TLS 1.3 verification. Transfers from unknown fingerprints are rejected automatically.", noticeCard);
+    noticeText->setWordWrap(true);
+    noticeText->setObjectName("subheading");
+
+    noticeLayout->addWidget(noticeTitle);
+    noticeLayout->addWidget(noticeText);
+    layout->addWidget(noticeCard);
+
+    layout->addStretch();
+    return recvTab;
+}
+
+QWidget* MainWindow::createTrustTab() {
+    auto* trustTab = new QWidget();
+    auto* layout = new QVBoxLayout(trustTab);
+    layout->setContentsMargins(0, 10, 0, 0);
+    layout->setSpacing(12);
+
+    // Authorized Peers Card
+    auto* listCard = new QFrame(trustTab);
+    listCard->setObjectName("card");
+    auto* listLayout = new QVBoxLayout(listCard);
+    listLayout->setContentsMargins(18, 16, 18, 16);
+    listLayout->setSpacing(10);
+
+    auto* headerLayout = new QHBoxLayout();
+    auto* listTitle = new QLabel("Authorized Peers", listCard);
+    listTitle->setObjectName("cardTitle");
+    auto* removePeerBtn = new QPushButton("Remove Selected", listCard);
+    removePeerBtn->setObjectName("dangerBtn");
+    removePeerBtn->setFixedHeight(32);
+    connect(removePeerBtn, &QPushButton::clicked, this, &MainWindow::onRemovePeer);
+
+    headerLayout->addWidget(listTitle);
+    headerLayout->addStretch();
+    headerLayout->addWidget(removePeerBtn);
+    listLayout->addLayout(headerLayout);
+
+    peer_table_ = new QTableWidget(0, 2, listCard);
+    peer_table_->setHorizontalHeaderLabels({"Peer Name", "Fingerprint (SHA-256)"});
+    peer_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    peer_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    peer_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    peer_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    peer_table_->setAlternatingRowColors(true);
+    peer_table_->setFixedHeight(160);
+    listLayout->addWidget(peer_table_);
+
+    layout->addWidget(listCard);
+
+    // Add Peer Card
+    auto* addCard = new QFrame(trustTab);
+    addCard->setObjectName("card");
+    auto* addLayout = new QVBoxLayout(addCard);
+    addLayout->setContentsMargins(18, 16, 18, 16);
+    addLayout->setSpacing(10);
+
+    auto* addTitle = new QLabel("Add Trusted Peer", addCard);
+    addTitle->setObjectName("cardTitle");
+    addLayout->addWidget(addTitle);
+
+    auto* addFormLayout = new QHBoxLayout();
+    peer_name_input_ = new QLineEdit(addCard);
+    peer_name_input_->setPlaceholderText("Peer Alias (e.g. Alice)");
+    peer_name_input_->setFixedHeight(36);
+
+    peer_fp_input_ = new QLineEdit(addCard);
+    peer_fp_input_->setPlaceholderText("64-hex SHA-256 Fingerprint");
+    peer_fp_input_->setFixedHeight(36);
+
+    auto* addPeerBtn = new QPushButton("Add Peer", addCard);
+    addPeerBtn->setObjectName("primaryBtn");
+    addPeerBtn->setFixedHeight(36);
+    connect(addPeerBtn, &QPushButton::clicked, this, &MainWindow::onAddPeer);
+
+    addFormLayout->addWidget(peer_name_input_, 1);
+    addFormLayout->addWidget(peer_fp_input_, 2);
+    addFormLayout->addWidget(addPeerBtn);
+    addLayout->addLayout(addFormLayout);
+
+    layout->addWidget(addCard);
+    layout->addStretch();
+
+    return trustTab;
 }
 
 void MainWindow::onBrowseFile() {
@@ -139,6 +370,34 @@ void MainWindow::onBrowseFile() {
     if (!file.isEmpty()) {
         file_path_input_->setText(file);
     }
+}
+
+void MainWindow::onBrowseSaveDir() {
+    QString dir = QFileDialog::getExistingDirectory(this, "Select Directory to Save Incoming Files");
+    if (!dir.isEmpty()) {
+        save_dir_input_->setText(dir);
+    }
+}
+
+void MainWindow::onCopyFingerprint() {
+    if (raw_fingerprint_.isEmpty()) {
+        try {
+            raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(identity::CERT_FILE));
+        } catch (...) {}
+    }
+
+    if (!raw_fingerprint_.isEmpty()) {
+        QGuiApplication::clipboard()->setText(raw_fingerprint_);
+        copy_fp_btn_->setText("Copied!");
+        QTimer::singleShot(2000, this, [this]() {
+            if (copy_fp_btn_) copy_fp_btn_->setText("Copy");
+        });
+        onLogMessage("[INFO] Fingerprint copied to clipboard.");
+    }
+}
+
+void MainWindow::onClearLog() {
+    log_pane_->clear();
 }
 
 void MainWindow::onSendFile() {
@@ -151,6 +410,7 @@ void MainWindow::onSendFile() {
         return;
     }
     progress_bar_->setValue(0);
+    transfer_status_lbl_->setText(QString("Transferring %1 to %2:%3...").arg(path).arg(host).arg(port));
     bridge_->sendFile(host, port, path);
 }
 
@@ -162,13 +422,18 @@ void MainWindow::onStartServer() {
         return;
     }
     server_toggle_btn_->setEnabled(false);
+    server_toggle_btn_->setText("Server Running");
+    server_status_lbl_->setText(QString("Listening on port %1 (saving to '%2')").arg(port).arg(saveDir));
     bridge_->startServer(port, saveDir);
 }
 
 void MainWindow::onAddPeer() {
     QString name = peer_name_input_->text().trimmed();
     QString fp = peer_fp_input_->text().trimmed();
-    if (name.isEmpty() || fp.isEmpty()) return;
+    if (name.isEmpty() || fp.isEmpty()) {
+        QMessageBox::warning(this, "Validation", "Please provide both a peer name and fingerprint.");
+        return;
+    }
 
     trust::TrustStore store(identity::TRUST_FILE);
     std::string err = store.add(fp.toStdString(), name.toStdString());
@@ -179,16 +444,21 @@ void MainWindow::onAddPeer() {
     peer_name_input_->clear();
     peer_fp_input_->clear();
     refreshPeerList();
+    onLogMessage(QString("[TRUST] Added peer '%1' to trust store.").arg(name));
 }
 
 void MainWindow::onRemovePeer() {
     int row = peer_table_->currentRow();
-    if (row < 0) return;
+    if (row < 0) {
+        QMessageBox::information(this, "Notice", "Please select a peer row to remove.");
+        return;
+    }
     QString name = peer_table_->item(row, 0)->text();
 
     trust::TrustStore store(identity::TRUST_FILE);
     store.remove(name.toStdString());
     refreshPeerList();
+    onLogMessage(QString("[TRUST] Removed peer '%1' from trust store.").arg(name));
 }
 
 void MainWindow::refreshPeerList() {
@@ -197,8 +467,12 @@ void MainWindow::refreshPeerList() {
     for (const auto& entry : store.list()) {
         int row = peer_table_->rowCount();
         peer_table_->insertRow(row);
-        peer_table_->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(entry.name)));
-        peer_table_->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(trust::display_fingerprint(entry.fingerprint))));
+        auto* nameItem = new QTableWidgetItem(QString::fromStdString(entry.name));
+        auto* fpItem = new QTableWidgetItem(QString::fromStdString(trust::display_fingerprint(entry.fingerprint)));
+        nameItem->setTextAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        fpItem->setTextAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        peer_table_->setItem(row, 0, nameItem);
+        peer_table_->setItem(row, 1, fpItem);
     }
 }
 
@@ -206,6 +480,25 @@ void MainWindow::onLogMessage(const QString& msg) {
     log_pane_->append(msg);
 }
 
-void MainWindow::onTransferProgress(int percentage, quint64, quint64) {
+void MainWindow::onTransferProgress(int percentage, quint64 transferred, quint64 total) {
     progress_bar_->setValue(percentage);
+    if (total > 0) {
+        double transMb = static_cast<double>(transferred) / (1024.0 * 1024.0);
+        double totalMb = static_cast<double>(total) / (1024.0 * 1024.0);
+        transfer_status_lbl_->setText(QString("Progress: %1% (%2 MB / %3 MB)")
+            .arg(percentage)
+            .arg(transMb, 0, 'f', 2)
+            .arg(totalMb, 0, 'f', 2));
+    } else {
+        transfer_status_lbl_->setText(QString("Progress: %1%").arg(percentage));
+    }
+}
+
+void MainWindow::onTransferCompleted(bool success, const QString& status) {
+    if (success) {
+        progress_bar_->setValue(100);
+        transfer_status_lbl_->setText("Transfer completed successfully!");
+    } else {
+        transfer_status_lbl_->setText(QString("Transfer failed: %1").arg(status));
+    }
 }
