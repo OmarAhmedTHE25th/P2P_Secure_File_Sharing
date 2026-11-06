@@ -1,8 +1,7 @@
 #include "main_window.hpp"
-#include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QGridLayout>
 #include <QFormLayout>
-#include <QDialog>
 #include <QTabWidget>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -11,9 +10,23 @@
 #include <QClipboard>
 #include <QTimer>
 #include <QFile>
+#include <QStandardPaths>
+#include <QDir>
+#include <filesystem>
 #include <openssl/pem.h>
 #include "identity.hpp"
 #include "trust_store.hpp"
+
+namespace {
+std::filesystem::path getIdentityDirectory() {
+    QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir dir(qPath);
+    if (!dir.exists()) {
+        dir.mkpath(".");
+    }
+    return {qPath.toStdU16String()};
+}
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), bridge_(new NetworkBridge(this)) {
@@ -33,11 +46,14 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 bool MainWindow::initializeIdentity() {
-    auto readPrivateKey = [](const QString& passphrase) {
+    const auto keyPath = getIdentityDirectory() / identity::KEY_FILE;
+    const auto certPath = getIdentityDirectory() / identity::CERT_FILE;
+
+    auto readPrivateKey = [&keyPath](const QString& passphrase) {
 #ifdef _WIN32
-        FILE* file = _wfopen(std::filesystem::path(identity::KEY_FILE).wstring().c_str(), L"rb");
+        FILE* file = _wfopen(keyPath.wstring().c_str(), L"rb");
 #else
-        FILE* file = std::fopen(identity::KEY_FILE, "rb");
+        FILE* file = std::fopen(keyPath.string().c_str(), "rb");
 #endif
         if (!file) return false;
         EVP_PKEY* key = PEM_read_PrivateKey(
@@ -49,7 +65,7 @@ bool MainWindow::initializeIdentity() {
     };
 
     QString passphrase;
-    if (!QFile::exists(identity::KEY_FILE)) {
+    if (!std::filesystem::exists(keyPath)) {
         QDialog dialog(this);
         dialog.setWindowTitle("Create Node Identity");
         dialog.setModal(true);
@@ -79,8 +95,7 @@ bool MainWindow::initializeIdentity() {
                 return;
             }
             try {
-                identity::generate(identity::CERT_FILE, identity::KEY_FILE,
-                                   alias.toStdString(), first.toStdString());
+                identity::generate(certPath, keyPath, alias.toStdString(), first.toStdString());
                 passphrase = first;
                 dialog.accept();
             } catch (const std::exception& error) {
@@ -90,7 +105,7 @@ bool MainWindow::initializeIdentity() {
 
         if (dialog.exec() != QDialog::Accepted) return false;
     } else {
-        if (!QFile::exists(identity::CERT_FILE)) {
+        if (!std::filesystem::exists(certPath)) {
             QMessageBox::critical(this, "Identity Error",
                                   "identity.key exists, but identity.crt is missing.");
             return false;
@@ -121,7 +136,7 @@ bool MainWindow::initializeIdentity() {
 
     try {
         raw_fingerprint_ = QString::fromStdString(
-            identity::fingerprint_of_file(identity::CERT_FILE));
+            identity::fingerprint_of_file(certPath));
         fp_label_->setText(QString::fromStdString(
             trust::display_fingerprint(raw_fingerprint_.toStdString())));
         bridge_->setIdentityPassphrase(passphrase);
@@ -159,14 +174,15 @@ void MainWindow::setupUi() {
 
     QString my_fp = "No Identity Found";
     try {
-        raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(identity::CERT_FILE));
+        const auto certPath = getIdentityDirectory() / identity::CERT_FILE;
+        raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(certPath));
         my_fp = QString::fromStdString(trust::display_fingerprint(raw_fingerprint_.toStdString()));
     } catch (...) {}
 
     auto* fpRowLayout = new QHBoxLayout();
     auto* fpTitle = new QLabel("My Fingerprint:", centralWidget);
     fpTitle->setObjectName("subheading");
-    
+
     fp_label_ = new QLabel(my_fp, centralWidget);
     fp_label_->setObjectName("monoBox");
     fp_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -497,7 +513,8 @@ void MainWindow::onBrowseSaveDir() {
 void MainWindow::onCopyFingerprint() {
     if (raw_fingerprint_.isEmpty()) {
         try {
-            raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(identity::CERT_FILE));
+            const auto certPath = getIdentityDirectory() / identity::CERT_FILE;
+            raw_fingerprint_ = QString::fromStdString(identity::fingerprint_of_file(certPath));
         } catch (...) {}
     }
 
@@ -550,7 +567,8 @@ void MainWindow::onAddPeer() {
         return;
     }
 
-    trust::TrustStore store(identity::TRUST_FILE);
+    const auto trustPath = getIdentityDirectory() / identity::TRUST_FILE;
+    trust::TrustStore store(trustPath);
     std::string err = store.add(fp.toStdString(), name.toStdString());
     if (!err.empty()) {
         QMessageBox::critical(this, "Error", QString::fromStdString(err));
@@ -570,15 +588,17 @@ void MainWindow::onRemovePeer() {
     }
     QString name = peer_table_->item(row, 0)->text();
 
-    trust::TrustStore store(identity::TRUST_FILE);
+    const auto trustPath = getIdentityDirectory() / identity::TRUST_FILE;
+    trust::TrustStore store(trustPath);
     store.remove(name.toStdString());
     refreshPeerList();
     onLogMessage(QString("[TRUST] Removed peer '%1' from trust store.").arg(name));
 }
 
-void MainWindow::refreshPeerList() {
+void MainWindow::refreshPeerList() const {
     peer_table_->setRowCount(0);
-    trust::TrustStore store(identity::TRUST_FILE);
+    const auto trustPath = getIdentityDirectory() / identity::TRUST_FILE;
+    trust::TrustStore store(trustPath);
     for (const auto& entry : store.list()) {
         int row = peer_table_->rowCount();
         peer_table_->insertRow(row);
@@ -591,11 +611,11 @@ void MainWindow::refreshPeerList() {
     }
 }
 
-void MainWindow::onLogMessage(const QString& msg) {
+void MainWindow::onLogMessage(const QString& msg) const {
     log_pane_->append(msg);
 }
 
-void MainWindow::onTransferProgress(int percentage, quint64 transferred, quint64 total) {
+void MainWindow::onTransferProgress(int percentage, quint64 transferred, quint64 total) const {
     progress_bar_->setValue(percentage);
     if (total > 0) {
         double transMb = static_cast<double>(transferred) / (1024.0 * 1024.0);
@@ -609,7 +629,7 @@ void MainWindow::onTransferProgress(int percentage, quint64 transferred, quint64
     }
 }
 
-void MainWindow::onTransferCompleted(bool success, const QString& status) {
+void MainWindow::onTransferCompleted(bool success, const QString& status) const {
     if (success) {
         progress_bar_->setValue(100);
         transfer_status_lbl_->setText("Transfer completed successfully!");

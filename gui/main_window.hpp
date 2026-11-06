@@ -24,10 +24,10 @@ private slots:
     void onStartServer();
     void onAddPeer();
     void onRemovePeer();
-    void onLogMessage(const QString& msg);
-    void onTransferProgress(int percentage, quint64 transferred, quint64 total);
-    void onTransferCompleted(bool success, const QString& status);
-    void refreshPeerList();
+    void onLogMessage(const QString& msg) const;
+    void onTransferProgress(int percentage, quint64 transferred, quint64 total) const;
+    void onTransferCompleted(bool success, const QString& status) const;
+    void refreshPeerList() const;
 
 private:
     void setupUi();
