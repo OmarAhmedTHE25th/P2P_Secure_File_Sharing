@@ -103,8 +103,17 @@ bool MainWindow::initializeIdentity() {
                 passphrase = first;
                 dialog.accept();
             } catch (const std::exception& error) {
-                QMessageBox::critical(&dialog, "Identity Generation Failed", error.what());
-            }
+    char err_buf[256];
+    unsigned long err = ERR_get_error();
+    QString ssl_details;
+    while (err != 0) {
+        ERR_error_string_n(err, err_buf, sizeof(err_buf));
+        ssl_details += QString("\nOpenSSL Error: %1").arg(err_buf);
+        err = ERR_get_error();
+    }
+    QMessageBox::critical(&dialog, "Identity Generation Failed",
+                          QString("Error: %1%2").arg(error.what(), ssl_details));
+}
         });
 
         if (dialog.exec() != QDialog::Accepted) return false;
