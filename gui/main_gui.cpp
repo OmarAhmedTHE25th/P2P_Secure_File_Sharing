@@ -3,6 +3,8 @@
 #include <QStyleFactory>
 
 int main(int argc, char* argv[]) {
+    QCoreApplication::setOrganizationName("P2P Secure File Sharing");
+    QCoreApplication::setApplicationName("P2P Secure File Sharing");
     QApplication app(argc, argv);
     if (auto* fusion = QStyleFactory::create("Fusion")) {
         QApplication::setStyle(fusion);

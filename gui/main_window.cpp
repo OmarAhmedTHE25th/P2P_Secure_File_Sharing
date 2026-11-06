@@ -21,10 +21,14 @@ namespace {
 std::filesystem::path getIdentityDirectory() {
     QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir dir(qPath);
-    if (!dir.exists()) {
-        dir.mkpath(".");
+    if (!dir.exists() && !dir.mkpath(".")) {
+        throw std::runtime_error("cannot create identity directory: " + qPath.toStdString());
     }
-    return {qPath.toStdU16String()};
+#ifdef _WIN32
+    return std::filesystem::path(qPath.toStdWString());
+#else
+    return std::filesystem::path(qPath.toStdString());
+#endif
 }
 } // namespace
 

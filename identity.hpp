@@ -78,12 +78,22 @@ namespace identity {
                              const std::string& common_name, const std::string& passphrase = "",
                              bool overwrite = false) {
             namespace fs = std::filesystem;
+            const bool key_existed = fs::exists(key_path);
+            const bool cert_existed = fs::exists(cert_path);
             if (!overwrite && (fs::exists(cert_path) || fs::exists(key_path))) {
                 throw std::runtime_error("identity files already exist (use --force to replace them, "
                                          "but then everyone who trusts your old fingerprint must trust the new one)");
             }
             if (common_name.empty() || common_name.size() > 64) {
                 throw std::runtime_error("the name must be 1 to 64 characters long");
+            }
+            if (cert_path.has_parent_path()) {
+                std::error_code ec;
+                fs::create_directories(cert_path.parent_path(), ec);
+                if (ec) {
+                    throw std::runtime_error("cannot create " + cert_path.parent_path().string() +
+                                             ": " + ec.message());
+                }
             }
 
             std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_EC_gen("P-256"), &EVP_PKEY_free);
@@ -128,27 +138,23 @@ namespace identity {
                 std::fflush(key_file.get());
             }
 
-            {
+            try {
                 detail::FilePtr cert_file(detail::open_private_file(cert_path), &std::fclose);
                 if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
                 if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
                     throw std::runtime_error("could not write the certificate");
                 }
                 std::fflush(cert_file.get());
-            }
-        {
-#ifdef _WIN32
-                detail::FilePtr cert_file(_wfopen(cert_path.wstring().c_str(), L"wb"), &std::fclose);
-#else
-                detail::FilePtr cert_file(std::fopen(cert_path.string().c_str(), "wb"), &std::fclose);
-#endif
-                if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
-                if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
-                    throw std::runtime_error("could not write the certificate");
+            } catch (...) {
+                if (!key_existed) {
+                    std::error_code ec;
+                    fs::remove(key_path, ec);
                 }
-                std::fflush(cert_file.get());
-        }
-
-
+                if (!cert_existed) {
+                    std::error_code ec;
+                    fs::remove(cert_path, ec);
+                }
+                throw;
+            }
         }
 }// namespace identity
