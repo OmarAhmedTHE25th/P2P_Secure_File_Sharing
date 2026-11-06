@@ -136,7 +136,7 @@ jobs:
       - name: Install OpenSSL and Boost
         run: |
           choco install openssl.light -y
-          vcpkg install boost-asio:x64-windows
+          vcpkg install boost-asio:x64-windows boost-endian:x64-windows
 
       - name: Configure CMake
         run: |

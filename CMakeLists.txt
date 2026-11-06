@@ -8,7 +8,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 option(P2P_BUILD_TESTS "Build the unit tests" ON)
 option(P2P_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer (GCC/Clang only)" OFF)
 option(P2P_BUILD_GUI "Build the Qt6 desktop application" OFF)
-
+if (WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0A00) # Windows 10/11
+endif()
 # Sanitizers add checks that turn memory errors into loud crashes
 if(P2P_SANITIZE)
     if(MSVC)
