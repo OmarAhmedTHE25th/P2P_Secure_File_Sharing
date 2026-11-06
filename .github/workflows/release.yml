@@ -121,7 +121,7 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtbase'
+
 
       - name: Setup vcpkg caching
         uses: actions/cache@v4
