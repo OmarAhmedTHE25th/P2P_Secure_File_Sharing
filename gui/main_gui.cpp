@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
         color: #0f172a;
         border: 1px solid #cbd5e1;
         border-radius: 6px;
-        padding: 6px 12px;
+        padding: 8px 12px;
         font-family: "SF Mono", "Fira Code", "Consolas", "Courier New", monospace;
         font-size: 12px;
         font-weight: 500;
@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
         background-color: #ffffff;
         border: 1px solid #cbd5e1;
         border-radius: 8px;
-        padding: 6px 12px;
+        padding: 8px 14px;
         color: #0f172a;
         font-size: 13px;
     }
@@ -119,7 +119,7 @@ int main(int argc, char* argv[]) {
         font-weight: 600;
         font-size: 13px;
         border-radius: 8px;
-        padding: 8px 18px;
+        padding: 10px 20px;
         border: none;
     }
     QPushButton#primaryBtn:hover {
@@ -140,7 +140,7 @@ int main(int argc, char* argv[]) {
         font-weight: 600;
         font-size: 13px;
         border-radius: 8px;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border: 1px solid #cbd5e1;
     }
     QPushButton#secondaryBtn:hover, QPushButton:hover {
@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
         font-weight: 600;
         font-size: 12px;
         border-radius: 8px;
-        padding: 6px 14px;
+        padding: 8px 16px;
         border: 1px solid #fecaca;
     }
     QPushButton#dangerBtn:hover {
@@ -218,7 +218,7 @@ int main(int argc, char* argv[]) {
     QHeaderView::section {
         background-color: #f8fafc;
         color: #475569;
-        padding: 8px 12px;
+        padding: 10px 14px;
         border: none;
         border-bottom: 2px solid #e2e8f0;
         font-weight: 700;

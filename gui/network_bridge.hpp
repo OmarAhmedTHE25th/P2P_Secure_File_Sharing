@@ -15,6 +15,7 @@ public:
     explicit NetworkBridge(QObject* parent = nullptr);
     ~NetworkBridge();
 
+    void setIdentityPassphrase(const QString& passphrase);
     void startServer(uint16_t port, const QString& saveDir);
     void sendFile(const QString& host, uint16_t port, const QString& filePath);
 
@@ -30,6 +31,7 @@ private:
     std::thread worker_thread_;
 
     std::shared_ptr<trust::TrustStore> trust_store_;
+    std::string identity_passphrase_;
     std::unique_ptr<boost::asio::ssl::context> server_ssl_ctx_;
     std::unique_ptr<boost::asio::ssl::context> client_ssl_ctx_;
     std::shared_ptr<ServerNode> server_node_;

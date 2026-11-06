@@ -19,7 +19,7 @@ private slots:
     void onBrowseFile();
     void onBrowseSaveDir();
     void onCopyFingerprint();
-    void onClearLog();
+    void onClearLog() const;
     void onSendFile();
     void onStartServer();
     void onAddPeer();
@@ -31,6 +31,7 @@ private slots:
 
 private:
     void setupUi();
+    bool initializeIdentity();
     QWidget* createSendTab();
     QWidget* createReceiveTab();
     QWidget* createTrustTab();

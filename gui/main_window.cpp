@@ -1,7 +1,8 @@
 #include "main_window.hpp"
-#include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QFormLayout>
+#include <QDialog>
 #include <QTabWidget>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -9,12 +10,20 @@
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QTimer>
+#include <QFile>
+#include <openssl/pem.h>
 #include "identity.hpp"
 #include "trust_store.hpp"
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent), bridge_(new NetworkBridge(this)) {
+    setMinimumSize(940, 680);
+    resize(980, 720);
     setupUi();
+    if (!initializeIdentity()) {
+        QTimer::singleShot(0, this, &QWidget::close);
+        return;
+    }
 
     connect(bridge_, &NetworkBridge::logMessage, this, &MainWindow::onLogMessage);
     connect(bridge_, &NetworkBridge::transferProgress, this, &MainWindow::onTransferProgress);
@@ -23,27 +32,121 @@ MainWindow::MainWindow(QWidget* parent)
     refreshPeerList();
 }
 
+bool MainWindow::initializeIdentity() {
+    auto readPrivateKey = [](const QString& passphrase) {
+        FILE* file = std::fopen(identity::KEY_FILE, "rb");
+        if (!file) return false;
+        EVP_PKEY* key = PEM_read_PrivateKey(
+            file, nullptr, nullptr,
+            const_cast<char*>(passphrase.toUtf8().constData()));
+        std::fclose(file);
+        if (key) EVP_PKEY_free(key);
+        return key != nullptr;
+    };
+
+    QString passphrase;
+    if (!QFile::exists(identity::KEY_FILE)) {
+        QDialog dialog(this);
+        dialog.setWindowTitle("Create Node Identity");
+        dialog.setModal(true);
+
+        auto* form = new QFormLayout(&dialog);
+        auto* aliasInput = new QLineEdit(&dialog);
+        auto* passInput = new QLineEdit(&dialog);
+        auto* confirmInput = new QLineEdit(&dialog);
+        passInput->setEchoMode(QLineEdit::Password);
+        confirmInput->setEchoMode(QLineEdit::Password);
+        aliasInput->setPlaceholderText("e.g. Alice");
+        form->addRow("Node Alias / Display Name:", aliasInput);
+        form->addRow("Passphrase:", passInput);
+        form->addRow("Confirm Passphrase:", confirmInput);
+
+        auto* generateButton = new QPushButton("Generate", &dialog);
+        form->addRow(generateButton);
+        connect(generateButton, &QPushButton::clicked, &dialog, [&]() {
+            const QString alias = aliasInput->text().trimmed();
+            const QString first = passInput->text();
+            if (alias.isEmpty()) {
+                QMessageBox::warning(&dialog, "Identity", "Please enter a node alias.");
+                return;
+            }
+            if (first != confirmInput->text()) {
+                QMessageBox::warning(&dialog, "Identity", "Passphrases do not match.");
+                return;
+            }
+            try {
+                identity::generate(identity::CERT_FILE, identity::KEY_FILE,
+                                   alias.toStdString(), first.toStdString());
+                passphrase = first;
+                dialog.accept();
+            } catch (const std::exception& error) {
+                QMessageBox::critical(&dialog, "Identity Generation Failed", error.what());
+            }
+        });
+
+        if (dialog.exec() != QDialog::Accepted) return false;
+    } else {
+        if (!QFile::exists(identity::CERT_FILE)) {
+            QMessageBox::critical(this, "Identity Error",
+                                  "identity.key exists, but identity.crt is missing.");
+            return false;
+        }
+
+        if (!readPrivateKey(QString())) {
+            QDialog dialog(this);
+            dialog.setWindowTitle("Unlock Identity");
+            dialog.setModal(true);
+            auto* form = new QFormLayout(&dialog);
+            auto* passInput = new QLineEdit(&dialog);
+            passInput->setEchoMode(QLineEdit::Password);
+            form->addRow("Passphrase:", passInput);
+            auto* unlockButton = new QPushButton("Unlock", &dialog);
+            form->addRow(unlockButton);
+            connect(unlockButton, &QPushButton::clicked, &dialog, [&]() {
+                if (!readPrivateKey(passInput->text())) {
+                    QMessageBox::warning(&dialog, "Unlock Failed",
+                                         "The passphrase is incorrect or the private key is invalid.");
+                    return;
+                }
+                passphrase = passInput->text();
+                dialog.accept();
+            });
+            if (dialog.exec() != QDialog::Accepted) return false;
+        }
+    }
+
+    try {
+        raw_fingerprint_ = QString::fromStdString(
+            identity::fingerprint_of_file(identity::CERT_FILE));
+        fp_label_->setText(QString::fromStdString(
+            trust::display_fingerprint(raw_fingerprint_.toStdString())));
+        bridge_->setIdentityPassphrase(passphrase);
+        return true;
+    } catch (const std::exception& error) {
+        QMessageBox::critical(this, "Identity Error", error.what());
+        return false;
+    }
+}
+
 void MainWindow::setupUi() {
     setWindowTitle("P2P Secure File Sharing");
-    resize(820, 680);
-    setMinimumSize(740, 600);
 
     auto* centralWidget = new QWidget(this);
     auto* mainLayout = new QVBoxLayout(centralWidget);
-    mainLayout->setContentsMargins(24, 24, 24, 24);
-    mainLayout->setSpacing(16);
+    mainLayout->setContentsMargins(16, 16, 16, 16);
+    mainLayout->setSpacing(12);
 
     // Identity Card Container
-    auto* idCard = new QFrame(this);
+    auto* idCard = new QFrame(centralWidget);
     idCard->setObjectName("card");
     auto* idLayout = new QVBoxLayout(idCard);
-    idLayout->setContentsMargins(18, 16, 18, 16);
-    idLayout->setSpacing(8);
+    idLayout->setContentsMargins(22, 18, 22, 18);
+    idLayout->setSpacing(12);
 
     auto* idHeaderLayout = new QHBoxLayout();
-    auto* appTitle = new QLabel("P2P Secure File Sharing", this);
+    auto* appTitle = new QLabel("P2P Secure File Sharing", centralWidget);
     appTitle->setObjectName("appTitle");
-    auto* badge = new QLabel("TLS 1.3 Node", this);
+    auto* badge = new QLabel("TLS 1.3 Node", centralWidget);
     badge->setObjectName("badge");
     idHeaderLayout->addWidget(appTitle);
     idHeaderLayout->addStretch();
@@ -57,14 +160,14 @@ void MainWindow::setupUi() {
     } catch (...) {}
 
     auto* fpRowLayout = new QHBoxLayout();
-    auto* fpTitle = new QLabel("My Fingerprint:", this);
+    auto* fpTitle = new QLabel("My Fingerprint:", centralWidget);
     fpTitle->setObjectName("subheading");
     
-    fp_label_ = new QLabel(my_fp, this);
+    fp_label_ = new QLabel(my_fp, centralWidget);
     fp_label_->setObjectName("monoBox");
     fp_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
-    copy_fp_btn_ = new QPushButton("Copy", this);
+    copy_fp_btn_ = new QPushButton("Copy", centralWidget);
     copy_fp_btn_->setObjectName("secondaryBtn");
     copy_fp_btn_->setToolTip("Copy raw SHA-256 fingerprint to clipboard");
     copy_fp_btn_->setFixedWidth(70);
@@ -77,26 +180,30 @@ void MainWindow::setupUi() {
 
     mainLayout->addWidget(idCard);
 
-    // Tab Navigation
-    auto* tabs = new QTabWidget(this);
+    auto* columnsLayout = new QHBoxLayout();
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(12);
+
+    // Left column: tab navigation and functional forms
+    auto* tabs = new QTabWidget(centralWidget);
     tabs->addTab(createSendTab(), "Send File");
     tabs->addTab(createReceiveTab(), "Receive Files");
     tabs->addTab(createTrustTab(), "Trusted Peers");
-    mainLayout->addWidget(tabs);
+    columnsLayout->addWidget(tabs, 55);
 
-    // Activity Log Card Container
-    auto* logCard = new QFrame(this);
+    // Right column: activity log
+    auto* logCard = new QFrame(centralWidget);
     logCard->setObjectName("card");
     auto* logLayout = new QVBoxLayout(logCard);
-    logLayout->setContentsMargins(18, 14, 18, 16);
-    logLayout->setSpacing(8);
+    logLayout->setContentsMargins(22, 18, 22, 20);
+    logLayout->setSpacing(12);
 
     auto* logHeaderLayout = new QHBoxLayout();
-    auto* logTitle = new QLabel("Activity & Network Log", this);
+    auto* logTitle = new QLabel("Activity & Network Log", centralWidget);
     logTitle->setObjectName("cardTitle");
-    auto* clearLogBtn = new QPushButton("Clear Log", this);
+    auto* clearLogBtn = new QPushButton("Clear Log", centralWidget);
     clearLogBtn->setObjectName("secondaryBtn");
-    clearLogBtn->setFixedHeight(28);
+    clearLogBtn->setMinimumHeight(36);
     connect(clearLogBtn, &QPushButton::clicked, this, &MainWindow::onClearLog);
     logHeaderLayout->addWidget(logTitle);
     logHeaderLayout->addStretch();
@@ -105,10 +212,11 @@ void MainWindow::setupUi() {
 
     log_pane_ = new QTextEdit(this);
     log_pane_->setReadOnly(true);
-    log_pane_->setFixedHeight(120);
-    logLayout->addWidget(log_pane_);
+    log_pane_->setMinimumHeight(120);
+    logLayout->addWidget(log_pane_, 1);
 
-    mainLayout->addWidget(logCard);
+    columnsLayout->addWidget(logCard, 45);
+    mainLayout->addLayout(columnsLayout, 1);
 
     setCentralWidget(centralWidget);
 }
@@ -116,23 +224,24 @@ void MainWindow::setupUi() {
 QWidget* MainWindow::createSendTab() {
     auto* sendTab = new QWidget();
     auto* layout = new QVBoxLayout(sendTab);
-    layout->setContentsMargins(0, 10, 0, 0);
-    layout->setSpacing(12);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
 
     // Target Node Card
     auto* targetCard = new QFrame(sendTab);
     targetCard->setObjectName("card");
     auto* targetLayout = new QVBoxLayout(targetCard);
-    targetLayout->setContentsMargins(18, 16, 18, 16);
-    targetLayout->setSpacing(10);
+    targetLayout->setContentsMargins(22, 20, 22, 20);
+    targetLayout->setSpacing(14);
 
     auto* targetTitle = new QLabel("Target Peer Information", targetCard);
     targetTitle->setObjectName("cardTitle");
     targetLayout->addWidget(targetTitle);
 
     auto* targetFormLayout = new QGridLayout();
-    targetFormLayout->setHorizontalSpacing(16);
-    targetFormLayout->setVerticalSpacing(8);
+    targetFormLayout->setHorizontalSpacing(12);
+    targetFormLayout->setVerticalSpacing(10);
+    targetFormLayout->setColumnStretch(0, 1);
 
     auto* hostLabel = new QLabel("Host Address:", targetCard);
     hostLabel->setObjectName("inputLabel");
@@ -144,7 +253,7 @@ QWidget* MainWindow::createSendTab() {
     portLabel->setObjectName("inputLabel");
     port_input_ = new QLineEdit("8080", targetCard);
     port_input_->setPlaceholderText("8080");
-    port_input_->setFixedWidth(120);
+    port_input_->setFixedWidth(96);
     port_input_->setFixedHeight(36);
 
     targetFormLayout->addWidget(hostLabel, 0, 0);
@@ -159,8 +268,8 @@ QWidget* MainWindow::createSendTab() {
     auto* fileCard = new QFrame(sendTab);
     fileCard->setObjectName("card");
     auto* fileLayout = new QVBoxLayout(fileCard);
-    fileLayout->setContentsMargins(18, 16, 18, 16);
-    fileLayout->setSpacing(10);
+    fileLayout->setContentsMargins(22, 20, 22, 20);
+    fileLayout->setSpacing(14);
 
     auto* fileTitle = new QLabel("Payload Selection", fileCard);
     fileTitle->setObjectName("cardTitle");
@@ -186,19 +295,21 @@ QWidget* MainWindow::createSendTab() {
     auto* actionCard = new QFrame(sendTab);
     actionCard->setObjectName("card");
     auto* actionLayout = new QVBoxLayout(actionCard);
-    actionLayout->setContentsMargins(18, 16, 18, 16);
-    actionLayout->setSpacing(10);
+    actionLayout->setContentsMargins(22, 20, 22, 20);
+    actionLayout->setSpacing(14);
 
     send_btn_ = new QPushButton("Send File", actionCard);
     send_btn_->setObjectName("primaryBtn");
     send_btn_->setFixedHeight(40);
+    send_btn_->setMaximumWidth(820);
     connect(send_btn_, &QPushButton::clicked, this, &MainWindow::onSendFile);
-    actionLayout->addWidget(send_btn_);
+    actionLayout->addWidget(send_btn_, 0, Qt::AlignHCenter);
 
     progress_bar_ = new QProgressBar(actionCard);
     progress_bar_->setValue(0);
     progress_bar_->setFixedHeight(20);
-    actionLayout->addWidget(progress_bar_);
+    progress_bar_->setMaximumWidth(820);
+    actionLayout->addWidget(progress_bar_, 0, Qt::AlignHCenter);
 
     transfer_status_lbl_ = new QLabel("Ready to initiate transfer", actionCard);
     transfer_status_lbl_->setObjectName("subheading");
@@ -214,15 +325,15 @@ QWidget* MainWindow::createSendTab() {
 QWidget* MainWindow::createReceiveTab() {
     auto* recvTab = new QWidget();
     auto* layout = new QVBoxLayout(recvTab);
-    layout->setContentsMargins(0, 10, 0, 0);
-    layout->setSpacing(12);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
 
     // Listener Configuration Card
     auto* srvCard = new QFrame(recvTab);
     srvCard->setObjectName("card");
     auto* srvLayout = new QVBoxLayout(srvCard);
-    srvLayout->setContentsMargins(18, 16, 18, 16);
-    srvLayout->setSpacing(12);
+    srvLayout->setContentsMargins(22, 20, 22, 20);
+    srvLayout->setSpacing(14);
 
     auto* srvTitle = new QLabel("Incoming Transfers Listener", srvCard);
     srvTitle->setObjectName("cardTitle");
@@ -274,8 +385,8 @@ QWidget* MainWindow::createReceiveTab() {
     auto* noticeCard = new QFrame(recvTab);
     noticeCard->setObjectName("card");
     auto* noticeLayout = new QVBoxLayout(noticeCard);
-    noticeLayout->setContentsMargins(18, 14, 18, 14);
-    noticeLayout->setSpacing(6);
+    noticeLayout->setContentsMargins(22, 18, 22, 18);
+    noticeLayout->setSpacing(10);
 
     auto* noticeTitle = new QLabel("Security Notice", noticeCard);
     noticeTitle->setObjectName("cardTitle");
@@ -294,15 +405,15 @@ QWidget* MainWindow::createReceiveTab() {
 QWidget* MainWindow::createTrustTab() {
     auto* trustTab = new QWidget();
     auto* layout = new QVBoxLayout(trustTab);
-    layout->setContentsMargins(0, 10, 0, 0);
-    layout->setSpacing(12);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
 
     // Authorized Peers Card
     auto* listCard = new QFrame(trustTab);
     listCard->setObjectName("card");
     auto* listLayout = new QVBoxLayout(listCard);
-    listLayout->setContentsMargins(18, 16, 18, 16);
-    listLayout->setSpacing(10);
+    listLayout->setContentsMargins(22, 20, 22, 20);
+    listLayout->setSpacing(14);
 
     auto* headerLayout = new QHBoxLayout();
     auto* listTitle = new QLabel("Authorized Peers", listCard);
@@ -333,8 +444,8 @@ QWidget* MainWindow::createTrustTab() {
     auto* addCard = new QFrame(trustTab);
     addCard->setObjectName("card");
     auto* addLayout = new QVBoxLayout(addCard);
-    addLayout->setContentsMargins(18, 16, 18, 16);
-    addLayout->setSpacing(10);
+    addLayout->setContentsMargins(22, 20, 22, 20);
+    addLayout->setSpacing(14);
 
     auto* addTitle = new QLabel("Add Trusted Peer", addCard);
     addTitle->setObjectName("cardTitle");
@@ -396,7 +507,7 @@ void MainWindow::onCopyFingerprint() {
     }
 }
 
-void MainWindow::onClearLog() {
+void MainWindow::onClearLog() const {
     log_pane_->clear();
 }
 
@@ -410,7 +521,7 @@ void MainWindow::onSendFile() {
         return;
     }
     progress_bar_->setValue(0);
-    transfer_status_lbl_->setText(QString("Transferring %1 to %2:%3...").arg(path).arg(host).arg(port));
+    transfer_status_lbl_->setText(QString("Transferring %1 to %2:%3...").arg(path, host).arg(port));
     bridge_->sendFile(host, port, path);
 }
 

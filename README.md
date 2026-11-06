@@ -12,6 +12,7 @@ This is also a security project, so besides how to use it, this README explains 
 
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Opening the Qt GUI](#opening-the-qt-gui)
 - [Usage](#usage)
 - [How it works](#how-it-works)
 - [Threat model](#threat-model)
@@ -50,6 +51,42 @@ cd P2P_Secure_File_Sharing
 cmake -S . -B build
 cmake --build build
 ```
+
+### Opening the Qt GUI
+
+The desktop interface is built separately with Qt 6. On Ubuntu, install the Qt
+Widgets development package first:
+
+```bash
+sudo apt install qt6-base-dev
+```
+
+From the repository root, configure and build the GUI:
+
+```bash
+cmake -S . -B build-gui -DP2P_BUILD_GUI=ON -DP2P_BUILD_TESTS=OFF
+cmake --build build-gui --target P2P_Secure_File_Sharing_GUI
+```
+
+Launch it with:
+
+```bash
+./build-gui/P2P_Secure_File_Sharing_GUI
+```
+
+The GUI opens at a desktop-sized window and provides tabs for sending files,
+receiving files, and managing trusted peers. It uses the current working
+directory for `identity.crt`, `identity.key`, and `trusted_peers.txt`, so launch
+it from the folder containing the identity and trust files you want to use. For
+example, from an identity folder:
+
+```bash
+cd build/alice
+../../build-gui/P2P_Secure_File_Sharing_GUI
+```
+
+On WSL, run this from a WSLg-enabled distribution or use a Linux desktop
+session with Qt display support.
 
 Every node has its own **identity**, and only talks to peers whose **fingerprint** it was told to trust (see [Identity and trust](#identity-and-trust)). To try it on one machine, play two people, Alice and Bob, each in their own folder inside `build`:
 

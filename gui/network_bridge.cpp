@@ -20,11 +20,15 @@ NetworkBridge::~NetworkBridge() {
     }
 }
 
+void NetworkBridge::setIdentityPassphrase(const QString& passphrase) {
+    identity_passphrase_ = passphrase.toStdString();
+}
+
 void NetworkBridge::startServer(uint16_t port, const QString& saveDir) {
     boost::asio::post(io_ctx_, [this, port, saveDir]() {
         try {
             server_ssl_ctx_ = std::make_unique<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv13_server);
-            tls_trust::configure_server(*server_ssl_ctx_, trust_store_);
+            tls_trust::configure_server(*server_ssl_ctx_, trust_store_, identity_passphrase_);
 
             std::filesystem::path save_path = saveDir.toStdString();
             server_node_ = std::make_shared<ServerNode>(io_ctx_, *server_ssl_ctx_, port, save_path, trust_store_);
@@ -41,7 +45,7 @@ void NetworkBridge::sendFile(const QString& host, uint16_t port, const QString& 
     boost::asio::post(io_ctx_, [this, host, port, filePath]() {
         try {
             client_ssl_ctx_ = std::make_unique<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv13_client);
-            tls_trust::configure_client(*client_ssl_ctx_, trust_store_);
+            tls_trust::configure_client(*client_ssl_ctx_, trust_store_, identity_passphrase_);
 
             auto client = std::make_shared<ClientNode>(io_ctx_, *client_ssl_ctx_);
             emit logMessage(QString("[CLIENT] Connecting to %1:%2 to send %3...").arg(host).arg(port).arg(filePath));
