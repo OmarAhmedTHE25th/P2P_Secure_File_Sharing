@@ -16,7 +16,7 @@
 #include <openssl/pem.h>
 #include "identity.hpp"
 #include "trust_store.hpp"
-
+#include <openssl/err.h>
 namespace {
 std::filesystem::path getIdentityDirectory() {
     QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
