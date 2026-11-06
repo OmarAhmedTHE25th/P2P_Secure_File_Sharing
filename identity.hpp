@@ -11,17 +11,20 @@
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
-#include <openssl/rand.h>
 #include <openssl/x509.h>
+#include <QStandardPaths>
+#include <QDir>
+#include <filesystem>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #endif
 
 #if OPENSSL_VERSION_NUMBER < 0x30000000L
 #error "OpenSSL 3.0 or newer is required"
 #endif
+
+
 
 namespace identity {
 
@@ -31,19 +34,27 @@ inline constexpr const char* TRUST_FILE = "trusted_peers.txt";
 
 namespace detail {
 using FilePtr = std::unique_ptr<FILE, int (*)(FILE*)>;
+    inline std::filesystem::path getIdentityDirectory() {
+        QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir dir(qPath);
+        if (!dir.exists()) {
+            dir.mkpath(".");
+        }
+        return {qPath.toStdU16String()};
+    }
 
 // The private key file must never be readable by anyone else, not even for a moment
-inline FILE* open_private_file(const std::filesystem::path& path) {
+    // In identity.hpp, replace detail::open_private_file (around line 35):
+    inline FILE* open_private_file(const std::filesystem::path& path) {
 #ifdef _WIN32
-    return std::fopen(path.string().c_str(), "wb");
+        return _wfopen(path.wstring().c_str(), L"wb");
 #else
-    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return nullptr;
-    ::fchmod(fd, 0600);
-    return ::fdopen(fd, "wb");
+        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) return nullptr;
+        ::fchmod(fd, 0600);
+        return ::fdopen(fd, "wb");
 #endif
-}
-} // namespace detail
+    }} // namespace detail
 
 // SHA-256 of the certificate (its DER encoding), as 64 lowercase hex characters
 inline std::string fingerprint_of(const X509* cert) {
@@ -61,8 +72,12 @@ inline std::string fingerprint_of(const X509* cert) {
     return out;
 }
 
-inline std::string fingerprint_of_file(const std::filesystem::path& cert_path) {
+    inline std::string fingerprint_of_file(const std::filesystem::path& cert_path) {
+#ifdef _WIN32
+    detail::FilePtr file(_wfopen(cert_path.wstring().c_str(), L"rb"), &std::fclose);
+#else
     detail::FilePtr file(std::fopen(cert_path.string().c_str(), "rb"), &std::fclose);
+#endif
     if (!file) throw std::runtime_error("cannot open " + cert_path.string());
     std::unique_ptr<X509, decltype(&X509_free)> cert(
         PEM_read_X509(file.get(), nullptr, nullptr, nullptr), &X509_free);
@@ -108,7 +123,6 @@ inline void generate(const std::filesystem::path& cert_path, const std::filesyst
         X509_sign(cert.get(), key.get(), EVP_sha256()) == 0) {
         throw std::runtime_error("could not build the certificate");
     }
-
     {
         detail::FilePtr key_file(detail::open_private_file(key_path), &std::fclose);
         if (!key_file) throw std::runtime_error("cannot write " + key_path.string());
@@ -122,14 +136,22 @@ inline void generate(const std::filesystem::path& cert_path, const std::filesyst
         if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
                                  pass_data, pass_len, nullptr, nullptr) != 1) {
             throw std::runtime_error("could not write the private key");
-        }
+                                 }
+        std::fflush(key_file.get());
     }
     {
+#ifdef _WIN32
+        detail::FilePtr cert_file(_wfopen(cert_path.wstring().c_str(), L"wb"), &std::fclose);
+#else
         detail::FilePtr cert_file(std::fopen(cert_path.string().c_str(), "wb"), &std::fclose);
+#endif
         if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
         if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
             throw std::runtime_error("could not write the certificate");
         }
+        std::fflush(cert_file.get());
     }
+
+
 }
 } // namespace identity

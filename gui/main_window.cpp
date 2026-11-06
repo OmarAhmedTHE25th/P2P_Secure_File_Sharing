@@ -34,7 +34,11 @@ MainWindow::MainWindow(QWidget* parent)
 
 bool MainWindow::initializeIdentity() {
     auto readPrivateKey = [](const QString& passphrase) {
+#ifdef _WIN32
+        FILE* file = _wfopen(std::filesystem::path(identity::KEY_FILE).wstring().c_str(), L"rb");
+#else
         FILE* file = std::fopen(identity::KEY_FILE, "rb");
+#endif
         if (!file) return false;
         EVP_PKEY* key = PEM_read_PrivateKey(
             file, nullptr, nullptr,
