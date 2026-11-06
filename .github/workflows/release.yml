@@ -1,0 +1,192 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # JOB 1: Build Linux AppImage
+  # ==========================================
+  build-linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            libssl-dev \
+            libboost-all-dev \
+            qt6-base-dev \
+            libgl1-mesa-dev \
+            wget \
+            file
+
+      - name: Prepare Desktop Entry & Placeholder Icon
+        run: |
+          cat << 'EOF' > p2p_share.desktop
+          [Desktop Entry]
+          Type=Application
+          Name=P2P Secure File Transfer
+          Exec=P2P_Secure_File_Sharing_GUI
+          Icon=p2p_icon
+          Categories=Utility;Network;
+          Terminal=false
+          EOF
+
+          if [ ! -f p2p_icon.png ]; then
+            # Generate a 256x256 fallback blue PNG if none exists
+            python3 -c "
+          import struct, zlib
+          def make_png(w, h, r, g, b):
+              raw = b''.join([b'\x00' + bytes([r, g, b]) * w for _ in range(h)])
+              def chunk(tag, data):
+                  return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
+              return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+          with open('p2p_icon.png', 'wb') as f:
+              f.write(make_png(256, 256, 37, 99, 235))
+          "
+          fi
+
+      - name: Build Project (Release)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DP2P_BUILD_GUI=ON
+          cmake --build build --target P2P_Secure_File_Sharing_GUI
+
+      - name: Download AppImage Packaging Tools
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+      - name: Generate AppImage
+        run: |
+          export QMAKE=/usr/lib/qt6/bin/qmake
+          # Use extract-and-run flags to operate inside GitHub Actions Docker/VM containers
+          ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
+            --appdir AppDir \
+            -e build/P2P_Secure_File_Sharing_GUI \
+            -d p2p_share.desktop \
+            -i p2p_icon.png \
+            --plugin qt \
+            --output appimage
+
+          mv P2P_Secure_File_Transfer-x86_64.AppImage P2P-Secure-File-Transfer-Linux-x86_64.AppImage
+
+      - name: Upload Linux Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: P2P-Secure-File-Transfer-Linux-x86_64.AppImage
+
+  # ==========================================
+  # JOB 2: Build Native Windows Executable
+  # ==========================================
+  build-windows:
+    name: Build Windows x64 Bundle
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Ninja
+        uses: ashutoshvarma/setup-ninja@v1.1
+
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtbase'
+
+      - name: Install OpenSSL and Boost
+        run: |
+          choco install openssl.light -y
+          vcpkg install boost-asio:x64-windows
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DP2P_BUILD_GUI=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build Binary
+        run: cmake --build build --target P2P_Secure_File_Sharing_GUI --config Release
+
+      - name: Bundle DLLs with windeployqt
+        run: |
+          mkdir dist
+          copy build\P2P_Secure_File_Sharing_GUI.exe dist\
+          
+          # Deploy Qt dependencies and plugins
+          windeployqt --release --compiler-runtime dist\P2P_Secure_File_Sharing_GUI.exe
+          
+          # Copy OpenSSL runtime DLLs
+          copy "C:\Program Files\OpenSSL\bin\libssl-3-x64.dll" dist\
+          copy "C:\Program Files\OpenSSL\bin\libcrypto-3-x64.dll" dist\
+          
+          # Compress to zip distribution package
+          Compress-Archive -Path dist\* -DestinationPath P2P-Secure-File-Transfer-Windows-x64.zip
+
+      - name: Upload Windows Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: P2P-Secure-File-Transfer-Windows-x64.zip
+
+  # ==========================================
+  # JOB 3: Publish GitHub Release
+  # ==========================================
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+
+      - name: Publish Release with Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Release ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          files: |
+            P2P-Secure-File-Transfer-Linux-x86_64.AppImage
+            P2P-Secure-File-Transfer-Windows-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
