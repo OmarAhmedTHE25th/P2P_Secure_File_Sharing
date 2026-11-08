@@ -70,6 +70,10 @@ namespace {
         identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice");
         EXPECT_TRUE(std::filesystem::exists(dir.file("id.crt")));
         EXPECT_TRUE(std::filesystem::exists(dir.file("id.key")));
+        EXPECT_GT(std::filesystem::file_size(dir.file("id.crt")), 0u);
+        EXPECT_GT(std::filesystem::file_size(dir.file("id.key")), 0u);
+        EXPECT_FALSE(std::filesystem::exists(dir.file("id.crt").string() + ".tmp"));
+        EXPECT_FALSE(std::filesystem::exists(dir.file("id.key").string() + ".tmp"));
     }
 
     TEST(Identity, CertificateIsSelfSignedAndMatchesTheKey) {

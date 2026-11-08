@@ -121,37 +121,54 @@ namespace identity {
                 X509_sign(cert.get(), key.get(), EVP_sha256()) == 0) {
                 throw std::runtime_error("could not build the certificate");
                 }
-            {
-                detail::FilePtr key_file(detail::open_private_file(key_path), &std::fclose);
-                if (!key_file) throw std::runtime_error("cannot write " + key_path.string());
-
-                const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
-                const unsigned char* pass_data = passphrase.empty()
-                    ? nullptr
-                    : reinterpret_cast<const unsigned char*>(passphrase.data());
-                int pass_len = static_cast<int>(passphrase.size());
-
-                if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
-                                         pass_data, pass_len, nullptr, nullptr) != 1) {
-                    throw std::runtime_error("could not write the private key");
-                                         }
-                std::fflush(key_file.get());
-            }
-
+            const fs::path key_tmp = key_path.string() + ".tmp";
+            const fs::path cert_tmp = cert_path.string() + ".tmp";
             try {
-                detail::FilePtr cert_file(detail::open_private_file(cert_path), &std::fclose);
-                if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
-                if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
-                    throw std::runtime_error("could not write the certificate");
+                fs::remove(key_tmp);
+                fs::remove(cert_tmp);
+
+                {
+                    detail::FilePtr key_file(detail::open_private_file(key_tmp), &std::fclose);
+                    if (!key_file) throw std::runtime_error("cannot write " + key_path.string());
+
+                    const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
+                    const unsigned char* pass_data = passphrase.empty()
+                        ? nullptr
+                        : reinterpret_cast<const unsigned char*>(passphrase.data());
+                    const int pass_len = static_cast<int>(passphrase.size());
+
+                    if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
+                                             pass_data, pass_len, nullptr, nullptr) != 1 ||
+                        std::fflush(key_file.get()) != 0 ||
+                        std::fclose(key_file.release()) != 0) {
+                        throw std::runtime_error("could not write the private key");
+                    }
                 }
-                std::fflush(cert_file.get());
+
+                {
+                    detail::FilePtr cert_file(detail::open_private_file(cert_tmp), &std::fclose);
+                    if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
+                    if (PEM_write_X509(cert_file.get(), cert.get()) != 1 ||
+                        std::fflush(cert_file.get()) != 0 ||
+                        std::fclose(cert_file.release()) != 0) {
+                        throw std::runtime_error("could not write the certificate");
+                    }
+                }
+
+                if (overwrite) {
+                    fs::remove(cert_path);
+                    fs::remove(key_path);
+                }
+                fs::rename(key_tmp, key_path);
+                fs::rename(cert_tmp, cert_path);
             } catch (...) {
+                std::error_code ec;
+                fs::remove(key_tmp, ec);
+                fs::remove(cert_tmp, ec);
                 if (!key_existed) {
-                    std::error_code ec;
                     fs::remove(key_path, ec);
                 }
                 if (!cert_existed) {
-                    std::error_code ec;
                     fs::remove(cert_path, ec);
                 }
                 throw;

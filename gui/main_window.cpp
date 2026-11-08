@@ -27,7 +27,7 @@ std::filesystem::path getIdentityDirectory() {
 #ifdef _WIN32
     return std::filesystem::path(qPath.toStdWString());
 #else
-    return std::filesystem::path(qPath.toStdString());
+    return {qPath.toStdString()};
 #endif
 }
 } // namespace
@@ -67,6 +67,28 @@ bool MainWindow::initializeIdentity() {
         if (key) EVP_PKEY_free(key);
         return key != nullptr;
     };
+
+    // A failed generation can leave only one file behind. Treat that as an
+    // incomplete identity and allow the creation dialog to retry.
+    const bool keyExists = std::filesystem::exists(keyPath);
+    const bool certExists = std::filesystem::exists(certPath);
+    if (keyExists != certExists) {
+        std::error_code ec;
+        if (keyExists) std::filesystem::remove(keyPath, ec);
+        if (ec) {
+            QMessageBox::critical(this, "Identity Error",
+                                  QString("Cannot remove incomplete identity: %1")
+                                      .arg(QString::fromStdString(ec.message())));
+            return false;
+        }
+        if (certExists) std::filesystem::remove(certPath, ec);
+        if (ec) {
+            QMessageBox::critical(this, "Identity Error",
+                                  QString("Cannot remove incomplete identity: %1")
+                                      .arg(QString::fromStdString(ec.message())));
+            return false;
+        }
+    }
 
     QString passphrase;
     if (!std::filesystem::exists(keyPath)) {
@@ -118,12 +140,6 @@ bool MainWindow::initializeIdentity() {
 
         if (dialog.exec() != QDialog::Accepted) return false;
     } else {
-        if (!std::filesystem::exists(certPath)) {
-            QMessageBox::critical(this, "Identity Error",
-                                  "identity.key exists, but identity.crt is missing.");
-            return false;
-        }
-
         if (!readPrivateKey(QString())) {
             QDialog dialog(this);
             dialog.setWindowTitle("Unlock Identity");
