@@ -12,6 +12,7 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <openssl/err.h>
 #include <filesystem>
 #ifndef _WIN32
 #include <fcntl.h>
@@ -121,11 +122,14 @@ namespace identity {
                 X509_sign(cert.get(), key.get(), EVP_sha256()) == 0) {
                 throw std::runtime_error("could not build the certificate");
                 }
-            const fs::path key_tmp = key_path.string() + ".tmp";
-            const fs::path cert_tmp = cert_path.string() + ".tmp";
+            fs::path key_tmp = key_path;
+            fs::path cert_tmp = cert_path;
+            key_tmp += ".tmp";
+            cert_tmp += ".tmp";
             try {
-                fs::remove(key_tmp);
-                fs::remove(cert_tmp);
+                std::error_code cleanup_ec;
+                fs::remove(key_tmp, cleanup_ec);
+                fs::remove(cert_tmp, cleanup_ec);
 
                 {
                     detail::FilePtr key_file(detail::open_private_file(key_tmp), &std::fclose);
@@ -138,20 +142,27 @@ namespace identity {
                     const int pass_len = static_cast<int>(passphrase.size());
 
                     if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
-                                             pass_data, pass_len, nullptr, nullptr) != 1 ||
-                        std::fflush(key_file.get()) != 0 ||
-                        std::fclose(key_file.release()) != 0) {
-                        throw std::runtime_error("could not write the private key");
+                                             pass_data, pass_len, nullptr, nullptr) != 1) {
+                        throw std::runtime_error("could not write the private key: " +
+                                                 std::string(ERR_error_string(ERR_get_error(), nullptr)));
+                    }
+                    if (std::fflush(key_file.get()) != 0) {
+                        throw std::runtime_error("could not flush the private key");
+                    }
+                    if (std::fclose(key_file.release()) != 0) {
+                        throw std::runtime_error("could not close the private key");
                     }
                 }
 
                 {
                     detail::FilePtr cert_file(detail::open_private_file(cert_tmp), &std::fclose);
                     if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
-                    if (PEM_write_X509(cert_file.get(), cert.get()) != 1 ||
-                        std::fflush(cert_file.get()) != 0 ||
-                        std::fclose(cert_file.release()) != 0) {
+                    if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
                         throw std::runtime_error("could not write the certificate");
+                    }
+                    if (std::fflush(cert_file.get()) != 0 ||
+                        std::fclose(cert_file.release()) != 0) {
+                        throw std::runtime_error("could not finalize the certificate");
                     }
                 }
 

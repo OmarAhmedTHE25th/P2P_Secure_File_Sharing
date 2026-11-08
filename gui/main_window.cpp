@@ -52,6 +52,10 @@ MainWindow::MainWindow(QWidget* parent)
 bool MainWindow::initializeIdentity() {
     const auto keyPath = getIdentityDirectory() / identity::KEY_FILE;
     const auto certPath = getIdentityDirectory() / identity::CERT_FILE;
+    auto keyTempPath = keyPath;
+    auto certTempPath = certPath;
+    keyTempPath += ".tmp";
+    certTempPath += ".tmp";
 
     auto readPrivateKey = [&keyPath](const QString& passphrase) {
 #ifdef _WIN32
@@ -72,6 +76,9 @@ bool MainWindow::initializeIdentity() {
     // incomplete identity and allow the creation dialog to retry.
     const bool keyExists = std::filesystem::exists(keyPath);
     const bool certExists = std::filesystem::exists(certPath);
+    std::error_code tempCleanupError;
+    std::filesystem::remove(keyTempPath, tempCleanupError);
+    std::filesystem::remove(certTempPath, tempCleanupError);
     if (keyExists != certExists) {
         std::error_code ec;
         if (keyExists) std::filesystem::remove(keyPath, ec);

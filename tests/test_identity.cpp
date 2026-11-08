@@ -72,8 +72,12 @@ namespace {
         EXPECT_TRUE(std::filesystem::exists(dir.file("id.key")));
         EXPECT_GT(std::filesystem::file_size(dir.file("id.crt")), 0u);
         EXPECT_GT(std::filesystem::file_size(dir.file("id.key")), 0u);
-        EXPECT_FALSE(std::filesystem::exists(dir.file("id.crt").string() + ".tmp"));
-        EXPECT_FALSE(std::filesystem::exists(dir.file("id.key").string() + ".tmp"));
+        auto cert_tmp = dir.file("id.crt");
+        auto key_tmp = dir.file("id.key");
+        cert_tmp += ".tmp";
+        key_tmp += ".tmp";
+        EXPECT_FALSE(std::filesystem::exists(cert_tmp));
+        EXPECT_FALSE(std::filesystem::exists(key_tmp));
     }
 
     TEST(Identity, CertificateIsSelfSignedAndMatchesTheKey) {
