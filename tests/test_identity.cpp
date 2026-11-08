@@ -26,22 +26,57 @@ namespace {
     using KeyPtr  = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 
     CertPtr load_cert(const std::filesystem::path& path) {
-        FILE* f = std::fopen(path.string().c_str(), "rb");
-        CertPtr cert(f ? PEM_read_X509(f, nullptr, nullptr, nullptr) : nullptr, &X509_free);
-        if (f) std::fclose(f);
-        return cert;
+        try {
+            const std::string pem = identity::detail::read_file(path);
+            identity::detail::BioPtr bio(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), &BIO_free);
+            return {PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), &X509_free};
+        } catch (...) {
+            return {nullptr, &X509_free};
+        }
     }
 
     KeyPtr load_key(const std::filesystem::path& path, const std::string& pass = "") {
-        FILE* f = std::fopen(path.string().c_str(), "rb");
-        KeyPtr key(
-            f ? PEM_read_PrivateKey(f, nullptr, nullptr, pass.empty() ? nullptr : const_cast<char*>(pass.c_str()))
-              : nullptr,
-            &EVP_PKEY_free);
-        if (f) std::fclose(f);
-        return key;
+        try {
+            const std::string pem = identity::detail::read_file(path);
+            identity::detail::BioPtr bio(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), &BIO_free);
+            // always a non-null pointer, so OpenSSL never tries to prompt on the console
+            return {PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, const_cast<char*>(pass.c_str())),
+                          &EVP_PKEY_free};
+        } catch (...) {
+            return {nullptr, &EVP_PKEY_free};
+        }
+
+    }
+    TEST(Identity, PrivateKeyLoadsChecksThePassphrase) {
+        TempDir dir;
+        identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice", "supersecret");
+        EXPECT_FALSE(identity::private_key_loads(dir.file("id.key"), ""));
+        EXPECT_FALSE(identity::private_key_loads(dir.file("id.key"), "wrongpass"));
+        EXPECT_TRUE(identity::private_key_loads(dir.file("id.key"), "supersecret"));
     }
 
+    TEST(Identity, UnencryptedKeyLoadsWithEmptyPassphrase) {
+        TempDir dir;
+        identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice");
+        EXPECT_TRUE(identity::private_key_loads(dir.file("id.key"), ""));
+    }
+
+    TEST(Identity, PrivateKeyLoadsIsFalseForMissingOrJunkFile) {
+        TempDir dir;
+        EXPECT_FALSE(identity::private_key_loads(dir.file("missing.key"), ""));
+        std::ofstream(dir.file("junk.key")) << "not a key\n";
+        EXPECT_FALSE(identity::private_key_loads(dir.file("junk.key"), ""));
+    }
+
+    TEST(Identity, OverwriteReplacesBothFilesAndLeavesNoTmp) {
+        TempDir dir;
+        identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice");
+        const std::string before = identity::fingerprint_of_file(dir.file("id.crt"));
+        identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice", "", /*overwrite=*/true);
+        EXPECT_NE(identity::fingerprint_of_file(dir.file("id.crt")), before);
+        EXPECT_FALSE(std::filesystem::exists(dir.file("id.crt.tmp")));
+        EXPECT_FALSE(std::filesystem::exists(dir.file("id.key.tmp")));
+    }
     TEST(Identity, EncryptedKeyRequiresPassphraseToLoad) {
         TempDir dir;
         identity::generate(dir.file("id.crt"), dir.file("id.key"), "alice", "supersecret");

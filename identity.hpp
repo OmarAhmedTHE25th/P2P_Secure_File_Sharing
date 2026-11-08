@@ -168,30 +168,42 @@ namespace identity {
             fs::path cert_tmp = cert_path;
             key_tmp += ".tmp";
             cert_tmp += ".tmp";
-            try {
-                std::error_code cleanup_ec;
-                const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
-                const unsigned char* pass_data = passphrase.empty()
-                    ? nullptr
-                    : reinterpret_cast<const unsigned char*>(passphrase.data());
-                const int pass_len = static_cast<int>(passphrase.size());
+        try {
+            std::error_code cleanup_ec;
+            fs::remove(key_tmp, cleanup_ec);
+            fs::remove(cert_tmp, cleanup_ec);
 
-                detail::BioPtr key_bio(BIO_new(BIO_s_mem()), &BIO_free);
-                detail::BioPtr cert_bio(BIO_new(BIO_s_mem()), &BIO_free);
-                if (!key_bio || !cert_bio) throw std::runtime_error("could not create a memory buffer");
+            const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
+            const unsigned char* pass_data = passphrase.empty()
+                ? nullptr
+                : reinterpret_cast<const unsigned char*>(passphrase.data());
+            const int pass_len = static_cast<int>(passphrase.size());
 
-                if (PEM_write_bio_PrivateKey(key_bio.get(), key.get(), cipher,
-                                             pass_data, pass_len, nullptr, nullptr) != 1) {
-                    throw std::runtime_error("could not encode the private key: " +
-                                             std::string(ERR_error_string(ERR_get_error(), nullptr)));
-                                             }
-                if (PEM_write_bio_X509(cert_bio.get(), cert.get()) != 1) {
-                    throw std::runtime_error("could not encode the certificate");
-                }
+            detail::BioPtr key_bio(BIO_new(BIO_s_mem()), &BIO_free);
+            detail::BioPtr cert_bio(BIO_new(BIO_s_mem()), &BIO_free);
+            if (!key_bio || !cert_bio) throw std::runtime_error("could not create a memory buffer");
 
-                detail::write_private_file(key_tmp, detail::bio_contents(key_bio.get()));
-                detail::write_private_file(cert_tmp, detail::bio_contents(cert_bio.get()));
-            } catch (...) {
+            if (PEM_write_bio_PrivateKey(key_bio.get(), key.get(), cipher,
+                                         pass_data, pass_len, nullptr, nullptr) != 1) {
+                throw std::runtime_error("could not encode the private key: " +
+                                         std::string(ERR_error_string(ERR_get_error(), nullptr)));
+                                         }
+            if (PEM_write_bio_X509(cert_bio.get(), cert.get()) != 1) {
+                throw std::runtime_error("could not encode the certificate");
+            }
+
+            detail::write_private_file(key_tmp, detail::bio_contents(key_bio.get()));
+            detail::write_private_file(cert_tmp, detail::bio_contents(cert_bio.get()));
+
+            // these two were the missing part
+            if (overwrite) {
+                fs::remove(cert_path);
+                fs::remove(key_path);
+            }
+            fs::rename(key_tmp, key_path);
+            fs::rename(cert_tmp, cert_path);
+        }
+        catch (...) {
                 std::error_code ec;
                 fs::remove(key_tmp, ec);
                 fs::remove(cert_tmp, ec);
