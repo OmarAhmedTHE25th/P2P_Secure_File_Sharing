@@ -43,7 +43,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(bridge_, &NetworkBridge::logMessage, this, &MainWindow::onLogMessage);
     connect(bridge_, &NetworkBridge::transferProgress, this, &MainWindow::onTransferProgress);
     connect(bridge_, &NetworkBridge::transferCompleted, this, &MainWindow::onTransferCompleted);
-
+connect(bridge_, &NetworkBridge::serverStatus, this, &MainWindow::onServerStatus);
+    connect(bridge_, &NetworkBridge::receiveProgress, this, &MainWindow::onReceiveProgress);
+    connect(bridge_, &NetworkBridge::receiveFinished, this, &MainWindow::onReceiveFinished);
     refreshPeerList();
 }
 
@@ -396,7 +398,8 @@ QWidget* MainWindow::createReceiveTab() {
     dirLabel->setObjectName("inputLabel");
 
     auto* dirInputLayout = new QHBoxLayout();
-    save_dir_input_ = new QLineEdit("received", srvCard);
+    save_dir_input_ = new QLineEdit(
+    QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) + "/P2P Received", srvCard);
     save_dir_input_->setFixedHeight(36);
     auto* browseDirBtn = new QPushButton("Browse...", srvCard);
     browseDirBtn->setObjectName("secondaryBtn");
@@ -421,6 +424,11 @@ QWidget* MainWindow::createReceiveTab() {
     server_status_lbl_->setObjectName("subheading");
     server_status_lbl_->setAlignment(Qt::AlignCenter);
     srvLayout->addWidget(server_status_lbl_);
+
+    recv_progress_bar_ = new QProgressBar(srvCard);
+    recv_progress_bar_->setValue(0);
+    recv_progress_bar_->setFixedHeight(20);
+    srvLayout->addWidget(recv_progress_bar_);
 
     layout->addWidget(srvCard);
 
@@ -577,8 +585,7 @@ void MainWindow::onStartServer() {
         return;
     }
     server_toggle_btn_->setEnabled(false);
-    server_toggle_btn_->setText("Server Running");
-    server_status_lbl_->setText(QString("Listening on port %1 (saving to '%2')").arg(port).arg(saveDir));
+    server_toggle_btn_->setText("Starting...");
     bridge_->startServer(port, saveDir);
 }
 
@@ -653,10 +660,44 @@ void MainWindow::onTransferProgress(int percentage, quint64 transferred, quint64
 }
 
 void MainWindow::onTransferCompleted(bool success, const QString& status) const {
+    send_btn_->setEnabled(true);
     if (success) {
         progress_bar_->setValue(100);
         transfer_status_lbl_->setText("Transfer completed successfully!");
+        onLogMessage("[CLIENT] Done: " + status);
     } else {
         transfer_status_lbl_->setText(QString("Transfer failed: %1").arg(status));
+        onLogMessage("[CLIENT] FAILED: " + status);
+    }
+
+}
+void MainWindow::onServerStatus(bool ok, const QString& message) {
+    if (ok) {
+        server_toggle_btn_->setText("Server Running");
+        server_status_lbl_->setText(message);
+    } else {
+        server_toggle_btn_->setEnabled(true);
+        server_toggle_btn_->setText("Start Listening");
+        server_status_lbl_->setText("Could not start: " + message);
+    }
+}
+
+void MainWindow::onReceiveProgress(int percentage, quint64 received, quint64 total) {
+    recv_progress_bar_->setValue(percentage);
+    const double recvMb = static_cast<double>(received) / (1024.0 * 1024.0);
+    const double totalMb = static_cast<double>(total) / (1024.0 * 1024.0);
+    server_status_lbl_->setText(QString("Receiving: %1% (%2 MB / %3 MB)")
+        .arg(percentage).arg(recvMb, 0, 'f', 2).arg(totalMb, 0, 'f', 2));
+}
+
+void MainWindow::onReceiveFinished(bool ok, const QString& message) {
+    if (ok) {
+        recv_progress_bar_->setValue(100);
+        server_status_lbl_->setText("Received: " + message);
+        onLogMessage("[SERVER] Saved " + message);
+    } else {
+        recv_progress_bar_->setValue(0);
+        server_status_lbl_->setText("Receive failed: " + message);
+        onLogMessage("[SERVER] FAILED: " + message);
     }
 }

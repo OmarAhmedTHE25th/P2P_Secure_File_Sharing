@@ -28,7 +28,9 @@ private slots:
     void onTransferProgress(int percentage, quint64 transferred, quint64 total) const;
     void onTransferCompleted(bool success, const QString& status) const;
     void refreshPeerList() const;
-
+    void onServerStatus(bool ok, const QString& message);
+    void onReceiveProgress(int percentage, quint64 received, quint64 total);
+    void onReceiveFinished(bool ok, const QString& message);
 private:
     void setupUi();
     bool initializeIdentity();
@@ -56,6 +58,7 @@ private:
     QLineEdit* save_dir_input_ = nullptr;
     QPushButton* server_toggle_btn_ = nullptr;
     QLabel* server_status_lbl_ = nullptr;
+    QProgressBar* recv_progress_bar_ = nullptr;
 
     // Peer management
     QTableWidget* peer_table_ = nullptr;

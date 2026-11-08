@@ -19,6 +19,7 @@
 #include "file_streaming.hpp"
 #include "validation.hpp"
 #include "disk_budget.hpp"
+#include "events.hpp"
 
 using std::cout;
 using std::cerr;
@@ -35,14 +36,16 @@ class ServerSession : public enable_shared_from_this<ServerSession> {
 public:
     using SSLStream = net::ssl::stream<net::ip::tcp::socket>;
     ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir, std::shared_ptr<void> connection_slot,
-                  std::shared_ptr<DiskBudget> disk_budget)
+                  std::shared_ptr<DiskBudget> disk_budget, TransferEvents events = {})
      : socket_(std::move(socket)),
        save_dir_(std::move(save_dir)),
        timer_(socket_->get_executor()),
        connection_slot_(std::move(connection_slot)),
-       disk_budget_(std::move(disk_budget)) {}
+       disk_budget_(std::move(disk_budget)),
+       events_(std::move(events)) {}
 
     ~ServerSession() {
+        if (!safe_name_.empty()) report_done(false, "Transfer of '" + safe_name_ + "' did not complete");
         timer_.cancel();
         if (part_file_.is_open()) part_file_.close();
         if (!temp_path_.empty() && !finished_) {
@@ -161,14 +164,14 @@ private:
     void read_next_chunk() {
         uint64_t remaining = file_size_ - bytes_received_;
         
-        // Progress bar
         if (file_size_ > 0) {
-            int progress = static_cast<int>((bytes_received_ * 100) / file_size_);
-            static int last_progress = -1;
-            if (progress != last_progress) {
-                std::cout << "\r[SERVER] Progress: [" << std::string(progress / 2, '=') << std::string(50 - progress / 2, ' ') << "] " << progress << "%" << std::flush;
+            const int progress = static_cast<int>((bytes_received_ * 100) / file_size_);
+            if (progress != last_pct_) {
+                last_pct_ = progress;
+                std::cout << "\r[SERVER] Progress: [" << std::string(progress / 2, '=')
+                          << std::string(50 - progress / 2, ' ') << "] " << progress << "%" << std::flush;
                 if (progress == 100) std::cout << std::endl;
-                last_progress = progress;
+                if (events_.on_progress) events_.on_progress(bytes_received_, file_size_);
             }
         }
 
@@ -302,7 +305,12 @@ private:
                 if (on_sent) on_sent();
             });
     }
-    
+    void report_done(bool ok, const std::string& msg) {
+        if (reported_) return;
+        reported_ = true;
+        if (events_.on_finished) events_.on_finished(ok, msg);
+    }
+
     shared_ptr<SSLStream> socket_;
     net::steady_timer timer_;
     fs::path final_path_;
@@ -323,6 +331,9 @@ private:
     std::shared_ptr<void> connection_slot_;
     std::shared_ptr<DiskBudget> disk_budget_;
     DiskBudget::Reservation reservation_;
+    TransferEvents events_;
+    int last_pct_ = -1;
+    bool reported_ = false;
 };
 
 

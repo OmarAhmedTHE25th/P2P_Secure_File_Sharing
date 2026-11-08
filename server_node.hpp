@@ -11,7 +11,7 @@
 #include "server_session.hpp"
 #include "identity.hpp"
 #include "trust_store.hpp"
-
+#include "events.hpp"
 // A "seat" in the receiver. Creating one takes a seat, destroying it gives the seat back.
 // Whoever holds the ConnectionSlot (first the handshake, then the session) keeps the seat taken,
 // so the counter goes down exactly when the connection is really gone, whatever way it ended.
@@ -34,12 +34,15 @@ public:
     static constexpr std::chrono::seconds HANDSHAKE_TIMEOUT{10};
 
     ServerNode(net::io_context& io_ctx, net::ssl::context& ssl_ctx, uint16_t port, fs::path save_dir,
-               std::shared_ptr<trust::TrustStore> trust_store = nullptr)
+               std::shared_ptr<trust::TrustStore> trust_store = nullptr,TransferEvents events = {})
         : io_ctx_(io_ctx),
           ssl_ctx_(ssl_ctx),
           acceptor_(io_ctx, net::ip::tcp::endpoint(net::ip::tcp::v4(), port)),
           save_dir_(std::move(save_dir)),
-          trust_store_(trust_store ? std::move(trust_store) : std::make_shared<trust::TrustStore>(identity::TRUST_FILE)) {}
+          trust_store_(trust_store ? std::move(trust_store) : std::make_shared<trust::TrustStore>(identity::TRUST_FILE)),
+        events_(std::move(events)) {
+        
+    }
 
     uint16_t port() const {
         return acceptor_.local_endpoint().port();
@@ -107,7 +110,7 @@ private:
                 }
 
                 std::cout << "[SERVER] TLS handshake OK. Channel is secure.\n";
-                std::make_shared<ServerSession>(socket, self->save_dir_, slot, self->disk_budget_)->start();
+                std::make_shared<ServerSession>(socket, self->save_dir_, slot, self->disk_budget_, self->events_)->start();
             });
     }
 
@@ -119,5 +122,6 @@ private:
     std::shared_ptr<std::atomic<std::size_t>> active_connections_ =
         std::make_shared<std::atomic<std::size_t>>(0);
     std::shared_ptr<DiskBudget> disk_budget_ = std::make_shared<DiskBudget>();
+    TransferEvents events_;
 };
 #endif //P2P_SECURE_FILE_SHARING_SERVER_NODE_HPP

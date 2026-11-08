@@ -39,6 +39,8 @@ add_executable(P2P_Secure_File_Sharing
         server_session.hpp
         server_node.hpp
         p2p_node.hpp
+        gui/log_redirect.hpp
+        events.hpp
 )
 
 target_link_libraries(P2P_Secure_File_Sharing PRIVATE
@@ -78,6 +80,8 @@ if(P2P_BUILD_GUI)
             gui/main_gui.cpp
             gui/main_gui.cpp
             gui/network_bridge.cpp
+            gui/log_redirect.hpp
+            events.hpp
     )
 
     target_include_directories(P2P_Secure_File_Sharing_GUI PRIVATE
