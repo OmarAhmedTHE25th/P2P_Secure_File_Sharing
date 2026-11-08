@@ -335,7 +335,6 @@ Every control message is a fixed **47-byte header**; all numbers are big-endian.
 
 **Trust is only as good as the fingerprint you add.**
 - Nothing is trusted automatically. If you add a fingerprint you did not really check with its owner (or an attacker swapped the one you were given), you now trust the attacker. There is deliberately no "trust on first use" for receivers, because that would mean accepting any stranger.
-- The private key (`identity.key`) is stored unencrypted, protected only by file permissions. Anyone who copies it can pretend to be you to everyone who trusts you. If that happens, run `init --force` and give everyone your new fingerprint.
 - An identity cannot be renewed in place: certificates are valid for ten years, an expired one is refused, and a new identity means a new fingerprint that everyone has to trust again.
 - A trusted peer is trusted from any address (the fingerprint is the identity, not the host name). That is intended, but it means a trusted peer's key is all an attacker needs.
 - A sender that a receiver does not trust only sees a closed connection plus a hint (a TLS 1.3 detail: the sender's side of the handshake finishes before the receiver checks it). The receiver's log has the full explanation.
