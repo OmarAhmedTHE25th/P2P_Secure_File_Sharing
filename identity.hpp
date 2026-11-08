@@ -13,7 +13,9 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/err.h>
-#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <openssl/bio.h>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -43,7 +45,33 @@ namespace identity {
             return ::fdopen(fd, "wb");
 #endif
         }
+        using BioPtr = std::unique_ptr<BIO, int (*)(BIO*)>;
 
+        // Reads a whole file with normal C++ streams (safe for non-ASCII paths on Windows)
+        inline std::string read_file(const std::filesystem::path& path) {
+            std::ifstream in(path, std::ios::binary);
+            if (!in) throw std::runtime_error("cannot open " + path.string());
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+
+        // Writes bytes with OUR C runtime's FILE*, which OpenSSL never touches
+        inline void write_private_file(const std::filesystem::path& path, const std::string& bytes) {
+            FilePtr file(open_private_file(path), &std::fclose);
+            if (!file) throw std::runtime_error("cannot write " + path.string());
+            if (!bytes.empty() &&
+                std::fwrite(bytes.data(), 1, bytes.size(), file.get()) != bytes.size()) {
+                throw std::runtime_error("could not write " + path.string());
+                }
+            if (std::fflush(file.get()) != 0) throw std::runtime_error("could not flush " + path.string());
+            if (std::fclose(file.release()) != 0) throw std::runtime_error("could not close " + path.string());
+        }
+
+        inline std::string bio_contents(BIO* bio) {
+            char* data = nullptr;
+            const long length = BIO_get_mem_data(bio, &data);
+            if (length <= 0 || !data) throw std::runtime_error("OpenSSL produced no output");
+            return std::string(data, static_cast<std::size_t>(length));
+        }
     }
         // SHA-256 of the certificate (its DER encoding), as 64 lowercase hex characters
         inline std::string fingerprint_of(const X509* cert) {
@@ -61,18 +89,32 @@ namespace identity {
             return out;
         }
 
-        inline std::string fingerprint_of_file(const std::filesystem::path& cert_path) {
-#ifdef _WIN32
-            detail::FilePtr file(_wfopen(cert_path.wstring().c_str(), L"rb"), &std::fclose);
-#else
-            detail::FilePtr file(std::fopen(cert_path.string().c_str(), "rb"), &std::fclose);
-#endif
-            if (!file) throw std::runtime_error("cannot open " + cert_path.string());
-            std::unique_ptr<X509, decltype(&X509_free)> cert(
-                PEM_read_X509(file.get(), nullptr, nullptr, nullptr), &X509_free);
-            if (!cert) throw std::runtime_error(cert_path.string() + " is not a valid certificate");
-            return fingerprint_of(cert.get());
+    inline std::string fingerprint_of_file(const std::filesystem::path& cert_path) {
+        const std::string pem = detail::read_file(cert_path);
+        detail::BioPtr bio(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), &BIO_free);
+        if (!bio) throw std::runtime_error("could not create a memory buffer");
+        std::unique_ptr<X509, decltype(&X509_free)> cert(
+            PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), &X509_free);
+        if (!cert) throw std::runtime_error(cert_path.string() + " is not a valid certificate");
+        return fingerprint_of(cert.get());
+    }
+
+    // Can this key file be opened with this passphrase? (empty passphrase = unencrypted key)
+    inline bool private_key_loads(const std::filesystem::path& key_path, const std::string& passphrase) {
+        try {
+            const std::string pem = detail::read_file(key_path);
+            detail::BioPtr bio(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), &BIO_free);
+            if (!bio) return false;
+            // Always pass a non-null password pointer, otherwise OpenSSL tries to prompt on a console
+            std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
+                PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, const_cast<char*>(passphrase.c_str())),
+                &EVP_PKEY_free);
+            ERR_clear_error();
+            return key != nullptr;
+        } catch (...) {
+            return false;
         }
+    }
 
         // Creates a new identity: an EC P-256 key and a certificate for it, valid for ten years.
         inline void generate(const std::filesystem::path& cert_path, const std::filesystem::path& key_path,
@@ -128,50 +170,27 @@ namespace identity {
             cert_tmp += ".tmp";
             try {
                 std::error_code cleanup_ec;
-                fs::remove(key_tmp, cleanup_ec);
-                fs::remove(cert_tmp, cleanup_ec);
+                const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
+                const unsigned char* pass_data = passphrase.empty()
+                    ? nullptr
+                    : reinterpret_cast<const unsigned char*>(passphrase.data());
+                const int pass_len = static_cast<int>(passphrase.size());
 
-                {
-                    detail::FilePtr key_file(detail::open_private_file(key_tmp), &std::fclose);
-                    if (!key_file) throw std::runtime_error("cannot write " + key_path.string());
+                detail::BioPtr key_bio(BIO_new(BIO_s_mem()), &BIO_free);
+                detail::BioPtr cert_bio(BIO_new(BIO_s_mem()), &BIO_free);
+                if (!key_bio || !cert_bio) throw std::runtime_error("could not create a memory buffer");
 
-                    const EVP_CIPHER* cipher = passphrase.empty() ? nullptr : EVP_aes_256_cbc();
-                    const unsigned char* pass_data = passphrase.empty()
-                        ? nullptr
-                        : reinterpret_cast<const unsigned char*>(passphrase.data());
-                    const int pass_len = static_cast<int>(passphrase.size());
-
-                    if (PEM_write_PrivateKey(key_file.get(), key.get(), cipher,
+                if (PEM_write_bio_PrivateKey(key_bio.get(), key.get(), cipher,
                                              pass_data, pass_len, nullptr, nullptr) != 1) {
-                        throw std::runtime_error("could not write the private key: " +
-                                                 std::string(ERR_error_string(ERR_get_error(), nullptr)));
-                    }
-                    if (std::fflush(key_file.get()) != 0) {
-                        throw std::runtime_error("could not flush the private key");
-                    }
-                    if (std::fclose(key_file.release()) != 0) {
-                        throw std::runtime_error("could not close the private key");
-                    }
+                    throw std::runtime_error("could not encode the private key: " +
+                                             std::string(ERR_error_string(ERR_get_error(), nullptr)));
+                                             }
+                if (PEM_write_bio_X509(cert_bio.get(), cert.get()) != 1) {
+                    throw std::runtime_error("could not encode the certificate");
                 }
 
-                {
-                    detail::FilePtr cert_file(detail::open_private_file(cert_tmp), &std::fclose);
-                    if (!cert_file) throw std::runtime_error("cannot write " + cert_path.string());
-                    if (PEM_write_X509(cert_file.get(), cert.get()) != 1) {
-                        throw std::runtime_error("could not write the certificate");
-                    }
-                    if (std::fflush(cert_file.get()) != 0 ||
-                        std::fclose(cert_file.release()) != 0) {
-                        throw std::runtime_error("could not finalize the certificate");
-                    }
-                }
-
-                if (overwrite) {
-                    fs::remove(cert_path);
-                    fs::remove(key_path);
-                }
-                fs::rename(key_tmp, key_path);
-                fs::rename(cert_tmp, cert_path);
+                detail::write_private_file(key_tmp, detail::bio_contents(key_bio.get()));
+                detail::write_private_file(cert_tmp, detail::bio_contents(cert_bio.get()));
             } catch (...) {
                 std::error_code ec;
                 fs::remove(key_tmp, ec);

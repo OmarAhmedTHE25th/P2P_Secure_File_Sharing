@@ -7,15 +7,14 @@
 
 namespace {
 std::filesystem::path getIdentityDirectory() {
-    QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir dir(qPath);
-    if (!dir.exists() && !dir.mkpath(".")) {
+    const QString qPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (const QDir dir(qPath); !dir.exists() && !dir.mkpath(".")) {
         throw std::runtime_error("cannot create identity directory: " + qPath.toStdString());
     }
 #ifdef _WIN32
     return std::filesystem::path(qPath.toStdWString());
 #else
-    return std::filesystem::path(qPath.toStdString());
+    return {qPath.toStdString()};
 #endif
 }
 } // namespace
@@ -46,9 +45,8 @@ void NetworkBridge::startServer(uint16_t port, const QString& saveDir) {
         try {
             server_ssl_ctx_ = std::make_unique<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv13_server);
 
-            std::string cert_file = (getIdentityDirectory() / identity::CERT_FILE).string();
-            std::string key_file  = (getIdentityDirectory() / identity::KEY_FILE).string();
-
+            auto cert_file = getIdentityDirectory() / identity::CERT_FILE;
+            auto key_file  = getIdentityDirectory() / identity::KEY_FILE;
             tls_trust::configure_server(*server_ssl_ctx_, trust_store_, cert_file, key_file, identity_passphrase_);
 
             std::filesystem::path save_path = saveDir.toStdString();
@@ -67,8 +65,8 @@ void NetworkBridge::sendFile(const QString& host, uint16_t port, const QString& 
         try {
             client_ssl_ctx_ = std::make_unique<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv13_client);
 
-            std::string cert_file = (getIdentityDirectory() / identity::CERT_FILE).string();
-            std::string key_file  = (getIdentityDirectory() / identity::KEY_FILE).string();
+            auto cert_file = getIdentityDirectory() / identity::CERT_FILE;
+            auto key_file  = getIdentityDirectory() / identity::KEY_FILE;
 
             tls_trust::configure_client(*client_ssl_ctx_, trust_store_, cert_file, key_file, identity_passphrase_);
 

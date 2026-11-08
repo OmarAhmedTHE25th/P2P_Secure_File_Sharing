@@ -43,7 +43,7 @@ inline PeerVerdict judge_peer(int depth, int openssl_error, const std::string& f
 
 // `log_prefix` is "[SERVER]" or "[CLIENT]"; `peer_word` is how we call the other side in messages
 inline std::function<bool(bool, boost::asio::ssl::verify_context&)>
-make_verifier(std::shared_ptr<trust::TrustStore> store, std::string log_prefix, std::string peer_word) {
+make_verifier(const std::shared_ptr<trust::TrustStore>& store, const std::string& log_prefix, const std::string& peer_word) {
     return [store, log_prefix, peer_word](bool /*openssl's own verdict, replaced by ours*/,
                                           boost::asio::ssl::verify_context& context) -> bool {
         try {
@@ -88,31 +88,33 @@ make_verifier(std::shared_ptr<trust::TrustStore> store, std::string log_prefix, 
 }
 
     inline void load_identity(boost::asio::ssl::context& context,
-                              const std::string& cert_file,
-                              const std::string& key_file,
-                              const std::string& passphrase = "") {
+                          const std::filesystem::path& cert_file,
+                          const std::filesystem::path& key_file,
+                          const std::string& passphrase = "") {
     context.set_password_callback([passphrase](std::size_t, boost::asio::ssl::context_base::password_purpose) {
         return passphrase;
     });
-    context.use_certificate_chain_file(cert_file);
-    context.use_private_key_file(key_file, boost::asio::ssl::context::pem);
+    const std::string cert_pem = identity::detail::read_file(cert_file);
+    const std::string key_pem  = identity::detail::read_file(key_file);
+    context.use_certificate_chain(boost::asio::buffer(cert_pem));
+    context.use_private_key(boost::asio::buffer(key_pem), boost::asio::ssl::context::pem);
 }
 
 // For the receiving side: requires the sender to present an identity, and checks it against the list
-inline void configure_server(boost::asio::ssl::context& context, std::shared_ptr<trust::TrustStore> store) {
+inline void configure_server(boost::asio::ssl::context& context, const std::shared_ptr<trust::TrustStore>& store) {
     context.set_options(boost::asio::ssl::context::default_workarounds |
                         boost::asio::ssl::context::no_sslv2 |
                         boost::asio::ssl::context::no_sslv3 |
                         boost::asio::ssl::context::single_dh_use);
     load_identity(context);
     context.set_verify_mode(boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert);
-    context.set_verify_callback(make_verifier(std::move(store), "[SERVER]", "sender"));
+    context.set_verify_callback(make_verifier(store, "[SERVER]", "sender"));
 }
 
     inline void configure_server(boost::asio::ssl::context& context,
-                                std::shared_ptr<trust::TrustStore> store,
-                                const std::string& cert_file,
-                                const std::string& key_file,
+                                const std::shared_ptr<trust::TrustStore>& store,
+                                const std::filesystem::path& cert_file,
+                                const std::filesystem::path& key_file,
                                 const std::string& passphrase) {
     context.set_options(boost::asio::ssl::context::default_workarounds |
                         boost::asio::ssl::context::no_sslv2 |
@@ -120,30 +122,30 @@ inline void configure_server(boost::asio::ssl::context& context, std::shared_ptr
                         boost::asio::ssl::context::single_dh_use);
     load_identity(context, cert_file, key_file, passphrase);
     context.set_verify_mode(boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert);
-    context.set_verify_callback(make_verifier(std::move(store), "[SERVER]", "sender"));
+    context.set_verify_callback(make_verifier(store, "[SERVER]", "sender"));
 }
 
 // For the sending side: presents our identity, and checks the receiver's against the list
-inline void configure_client(boost::asio::ssl::context& context, std::shared_ptr<trust::TrustStore> store) {
+inline void configure_client(boost::asio::ssl::context& context, const std::shared_ptr<trust::TrustStore>& store) {
     context.set_options(boost::asio::ssl::context::default_workarounds |
                         boost::asio::ssl::context::no_sslv2 |
                         boost::asio::ssl::context::no_sslv3);
     load_identity(context);
     context.set_verify_mode(boost::asio::ssl::verify_peer);
-    context.set_verify_callback(make_verifier(std::move(store), "[CLIENT]", "receiver"));
+    context.set_verify_callback(make_verifier(store, "[CLIENT]", "receiver"));
 }
 
     inline void configure_client(boost::asio::ssl::context& context,
-                                std::shared_ptr<trust::TrustStore> store,
-                                const std::string& cert_file,
-                                const std::string& key_file,
+                                const std::shared_ptr<trust::TrustStore>& store,
+                                const std::filesystem::path& cert_file,
+                                const std::filesystem::path& key_file,
                                 const std::string& passphrase) {
     context.set_options(boost::asio::ssl::context::default_workarounds |
                         boost::asio::ssl::context::no_sslv2 |
                         boost::asio::ssl::context::no_sslv3);
     load_identity(context, cert_file, key_file, passphrase);
     context.set_verify_mode(boost::asio::ssl::verify_peer);
-    context.set_verify_callback(make_verifier(std::move(store), "[CLIENT]", "receiver"));
+    context.set_verify_callback(make_verifier(store, "[CLIENT]", "receiver"));
 }
 
 } // namespace tls_trust

@@ -9,11 +9,9 @@
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QTimer>
-#include <QFile>
 #include <QStandardPaths>
 #include <QDir>
 #include <filesystem>
-#include <openssl/pem.h>
 #include "identity.hpp"
 #include "trust_store.hpp"
 #include <openssl/err.h>
@@ -58,18 +56,7 @@ bool MainWindow::initializeIdentity() {
     certTempPath += ".tmp";
 
     auto readPrivateKey = [&keyPath](const QString& passphrase) {
-#ifdef _WIN32
-        FILE* file = _wfopen(keyPath.wstring().c_str(), L"rb");
-#else
-        FILE* file = std::fopen(keyPath.string().c_str(), "rb");
-#endif
-        if (!file) return false;
-        EVP_PKEY* key = PEM_read_PrivateKey(
-            file, nullptr, nullptr,
-            const_cast<char*>(passphrase.toUtf8().constData()));
-        std::fclose(file);
-        if (key) EVP_PKEY_free(key);
-        return key != nullptr;
+        return identity::private_key_loads(keyPath, passphrase.toStdString());
     };
 
     // A failed generation can leave only one file behind. Treat that as an
