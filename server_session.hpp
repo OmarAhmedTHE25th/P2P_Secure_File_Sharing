@@ -38,19 +38,21 @@ public:
     ServerSession(shared_ptr<SSLStream> socket, fs::path save_dir, std::shared_ptr<void> connection_slot,
                   std::shared_ptr<DiskBudget> disk_budget, TransferEvents events = {})
      : socket_(std::move(socket)),
-       save_dir_(std::move(save_dir)),
        timer_(socket_->get_executor()),
+       save_dir_(std::move(save_dir)),
        connection_slot_(std::move(connection_slot)),
        disk_budget_(std::move(disk_budget)),
        events_(std::move(events)) {}
 
     ~ServerSession() {
-        if (!safe_name_.empty()) report_done(false, "Transfer of '" + safe_name_ + "' did not complete");
+        if (!safe_name_.empty())
+            report_done(finished_, finished_ ? final_path_.string()
+                                             : "Transfer of '" + safe_name_ + "' did not complete");
         timer_.cancel();
         if (part_file_.is_open()) part_file_.close();
         if (!temp_path_.empty() && !finished_) {
             std::error_code ec;
-            fs::remove(temp_path_, ec);   // never leave half-received files behind
+            fs::remove(temp_path_, ec);   // to never leave half-received files behind
         }
     }
     void start () {
@@ -254,6 +256,7 @@ private:
         }
 
         finished_ = true;
+        report_done(true, final_path_.string());
         std::cout << "[SERVER] Verified and saved: " << final_path_.string() << '\n';
         send_ack(AckStatus::OK, [self = shared_from_this()] {
             self->shutdown_tls();
