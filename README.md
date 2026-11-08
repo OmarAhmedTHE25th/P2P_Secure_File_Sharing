@@ -1,6 +1,7 @@
 # P2P Secure File Sharing
 
 [![CI](https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing/actions/workflows/ci.yml/badge.svg)](https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/OmarAhmedTHE25th/P2P_Secure_File_Sharing?label=latest%20release)](https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
@@ -12,6 +13,7 @@ This is also a security project, so besides how to use it, this README explains 
 
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Releases](#releases)
 - [Opening the Qt GUI](#opening-the-qt-gui)
 - [Usage](#usage)
 - [How it works](#how-it-works)
@@ -88,6 +90,27 @@ cd build/alice
 On WSL, run this from a WSLg-enabled distribution or use a Linux desktop
 session with Qt display support.
 
+The GUI is organized around three workflows:
+
+- **Send File** selects a file, target address and port, then shows transfer
+  progress and activity in the network log.
+- **Receive Files** starts a listener, chooses the save directory and port, and
+  displays the mutual TLS security notice.
+- **Trusted Peers** adds or removes authorized peers by alias and SHA-256
+  certificate fingerprint.
+
+#### Send files
+
+![Send File tab](docs/images/gui-send-file.png)
+
+#### Receive files
+
+![Receive Files tab](docs/images/gui-receive-files.png)
+
+#### Manage trusted peers
+
+![Trusted Peers tab](docs/images/gui-trusted-peers.png)
+
 Every node has its own **identity**, and only talks to peers whose **fingerprint** it was told to trust (see [Identity and trust](#identity-and-trust)). To try it on one machine, play two people, Alice and Bob, each in their own folder inside `build`:
 
 ```bash
@@ -118,6 +141,19 @@ echo "hello" > test.txt
 ```
 
 The sender should end with `Receiver confirmed: file verified and saved!`, and `test.txt` appears in `build/alice/received/`.
+
+## Releases
+
+The current published release is **[v1.0.0](https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing/releases/tag/v1.0.0)**.
+Download the packaged desktop GUI from the
+[latest releases page](https://github.com/OmarAhmedTHE25th/P2P_Secure_File_Sharing/releases/latest):
+
+- **Linux x86_64**: `P2P-Secure-File-Transfer-Linux-x86_64.AppImage`
+- **Windows x64**: `P2P-Secure-File-Transfer-Windows-x64.zip`
+
+Releases are created automatically by GitHub Actions for tags matching `v*`.
+The release workflow builds the Qt 6 GUI in Release mode, packages the Linux
+AppImage and Windows bundle, and publishes both files to the GitHub release.
 
 ### Identity and trust
 
